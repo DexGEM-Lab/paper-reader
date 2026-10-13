@@ -1184,24 +1184,6 @@ class TeamStore:
                 continue
             self.set_done_state(rel_path, user.id, is_done=True)
 
-    def toggle_like(self, rel_path: str, user_id: int) -> bool:
-        with self._write_lock:
-            with self._connect() as conn:
-                paper_id = self._paper_id_for_rel_path_locked(conn, rel_path)
-                if paper_id is None:
-                    raise FileNotFoundError(rel_path)
-                row = conn.execute(
-                    "SELECT id FROM paper_likes WHERE paper_id = ? AND user_id = ?",
-                    (paper_id, user_id),
-                ).fetchone()
-                if row is None:
-                    conn.execute(
-                        "INSERT INTO paper_likes(paper_id, user_id, created_at) VALUES (?, ?, ?)",
-                        (paper_id, user_id, self._timestamp()),
-                    )
-                    return True
-                conn.execute("DELETE FROM paper_likes WHERE id = ?", (int(row["id"]),))
-                return False
 
     def add_comment(self, rel_path: str, user_id: int, body: str, parent_id: int | None = None) -> None:
         body = body.strip()
