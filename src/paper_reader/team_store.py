@@ -257,6 +257,13 @@ class TeamStore:
                     file_size INTEGER NOT NULL DEFAULT 0,
                     modified_at TEXT NOT NULL,
                     preview_kind TEXT NOT NULL DEFAULT 'file',
+                    resource_kind TEXT NOT NULL DEFAULT 'paper',
+                    canonical_url TEXT,
+                    source_domain TEXT,
+                    fetch_status TEXT NOT NULL DEFAULT 'ok',
+                    fetched_at TEXT,
+                    author TEXT,
+                    site_name TEXT,
                     is_done INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
@@ -268,9 +275,11 @@ class TeamStore:
                     source_type TEXT NOT NULL,
                     source_value TEXT NOT NULL,
                     source_url TEXT,
+                    source_context TEXT,
+                    sender_open_id TEXT,
+                    message_time_iso TEXT,
                     imported_by_user_id INTEGER,
                     created_at TEXT NOT NULL,
-                    UNIQUE (source_type, source_value),
                     FOREIGN KEY (paper_id) REFERENCES papers(id) ON DELETE CASCADE,
                     FOREIGN KEY (imported_by_user_id) REFERENCES users(id) ON DELETE SET NULL
                 );
@@ -409,6 +418,9 @@ class TeamStore:
                 CREATE INDEX IF NOT EXISTS idx_comments_paper_id ON comments(paper_id);
                 CREATE INDEX IF NOT EXISTS idx_prompt_runs_paper_id ON prompt_runs(paper_id);
                 CREATE INDEX IF NOT EXISTS idx_paper_sources_paper_id ON paper_sources(paper_id);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_paper_sources_canonical
+                    ON paper_sources(source_type, source_value)
+                    WHERE source_type IN ('arxiv', 'openreview', 'pdf_url', 'canonical_url');
                 CREATE INDEX IF NOT EXISTS idx_paper_tags_tag_id ON paper_tags(tag_id);
                 CREATE INDEX IF NOT EXISTS idx_chat_threads_paper_id ON chat_threads(paper_id);
                 CREATE INDEX IF NOT EXISTS idx_chat_messages_thread_id ON chat_messages(thread_id);
@@ -416,6 +428,8 @@ class TeamStore:
             )
             self._ensure_users_avatar_column(conn)
             self._ensure_papers_date_columns(conn)
+            self._ensure_papers_resource_columns(conn)
+            self._ensure_paper_sources_columns(conn)
             self._seed_roles(conn)
 
     def _seed_roles(self, conn: sqlite3.Connection) -> None:
@@ -435,6 +449,89 @@ class TeamStore:
             conn.execute("ALTER TABLE papers ADD COLUMN date_precision TEXT")
         if "date_source" not in columns:
             conn.execute("ALTER TABLE papers ADD COLUMN date_source TEXT")
+
+    def _ensure_papers_resource_columns(self, conn: sqlite3.Connection) -> None:
+        columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(papers)").fetchall()}
+        definitions = {
+            "resource_kind": "TEXT NOT NULL DEFAULT 'paper'",
+            "canonical_url": "TEXT",
+            "source_domain": "TEXT",
+            "fetch_status": "TEXT NOT NULL DEFAULT 'ok'",
+            "fetched_at": "TEXT",
+            "author": "TEXT",
+            "site_name": "TEXT",
+        }
+        for name, definition in definitions.items():
+            if name not in columns:
+                conn.execute(f"ALTER TABLE papers ADD COLUMN {name} {definition}")
+
+    def _ensure_paper_sources_columns(self, conn: sqlite3.Connection) -> None:
+        schema_row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'paper_sources'"
+        ).fetchone()
+        schema_sql = str(schema_row["sql"] or "") if schema_row is not None else ""
+        normalized_schema = re.sub(r"\s+", " ", schema_sql).casefold()
+        has_legacy_global_unique = "unique (source_type, source_value)" in normalized_schema
+        if has_legacy_global_unique:
+            old_columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(paper_sources)").fetchall()}
+            conn.execute(
+                """
+                CREATE TABLE paper_sources_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    paper_id INTEGER NOT NULL,
+                    source_type TEXT NOT NULL,
+                    source_value TEXT NOT NULL,
+                    source_url TEXT,
+                    source_context TEXT,
+                    sender_open_id TEXT,
+                    message_time_iso TEXT,
+                    imported_by_user_id INTEGER,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (paper_id) REFERENCES papers(id) ON DELETE CASCADE,
+                    FOREIGN KEY (imported_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+                )
+                """
+            )
+            optional = {
+                "source_context": "NULL",
+                "sender_open_id": "NULL",
+                "message_time_iso": "NULL",
+            }
+            select_fields = [
+                "id",
+                "paper_id",
+                "source_type",
+                "source_value",
+                "source_url",
+                *(name if name in old_columns else fallback for name, fallback in optional.items()),
+                "imported_by_user_id",
+                "created_at",
+            ]
+            conn.execute(
+                """
+                INSERT INTO paper_sources_new(
+                    id, paper_id, source_type, source_value, source_url, source_context,
+                    sender_open_id, message_time_iso, imported_by_user_id, created_at
+                )
+                SELECT %s FROM paper_sources
+                """ % ", ".join(select_fields)
+            )
+            conn.execute("DROP TABLE paper_sources")
+            conn.execute("ALTER TABLE paper_sources_new RENAME TO paper_sources")
+        else:
+            columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(paper_sources)").fetchall()}
+            for name in ("source_context", "sender_open_id", "message_time_iso"):
+                if name not in columns:
+                    conn.execute(f"ALTER TABLE paper_sources ADD COLUMN {name} TEXT")
+
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_paper_sources_paper_id ON paper_sources(paper_id)")
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_paper_sources_canonical
+            ON paper_sources(source_type, source_value)
+            WHERE source_type IN ('arxiv', 'openreview', 'pdf_url', 'canonical_url')
+            """
+        )
 
     def _migrate_likes_into_recommendations(self) -> None:
         with self._write_lock:
@@ -782,9 +879,10 @@ class TeamStore:
                         """
                         INSERT INTO papers(
                             rel_path, file_name, folder, extension, title, display_title, preview_text,
-                            extracted_date, sort_date, date_precision, date_source, file_size, modified_at, preview_kind, is_done,
+                            extracted_date, sort_date, date_precision, date_source, file_size, modified_at, preview_kind,
+                            resource_kind, canonical_url, source_domain, fetch_status, fetched_at, author, site_name, is_done,
                             created_at, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT(rel_path) DO UPDATE SET
                             file_name = excluded.file_name,
                             folder = excluded.folder,
@@ -799,6 +897,13 @@ class TeamStore:
                             file_size = excluded.file_size,
                             modified_at = excluded.modified_at,
                             preview_kind = excluded.preview_kind,
+                            resource_kind = excluded.resource_kind,
+                            canonical_url = excluded.canonical_url,
+                            source_domain = excluded.source_domain,
+                            fetch_status = excluded.fetch_status,
+                            fetched_at = excluded.fetched_at,
+                            author = excluded.author,
+                            site_name = excluded.site_name,
                             is_done = excluded.is_done,
                             updated_at = excluded.updated_at
                         """,
@@ -817,6 +922,13 @@ class TeamStore:
                             int(paper.file_size),
                             paper.modified_at,
                             paper.preview_kind,
+                            getattr(paper, "resource_kind", "paper"),
+                            getattr(paper, "source_url", None),
+                            getattr(paper, "source_domain", None),
+                            getattr(paper, "fetch_status", "ok"),
+                            getattr(paper, "fetched_at", None),
+                            getattr(paper, "author", None),
+                            getattr(paper, "site_name", None),
                             1 if paper.is_done else 0,
                             now,
                             now,
@@ -961,7 +1073,8 @@ class TeamStore:
                     UPDATE papers
                     SET rel_path = ?, file_name = ?, folder = ?, extension = ?, title = ?, display_title = ?,
                         preview_text = ?, extracted_date = ?, sort_date = ?, date_precision = ?, date_source = ?, file_size = ?, modified_at = ?,
-                        preview_kind = ?, is_done = ?, updated_at = ?
+                        preview_kind = ?, resource_kind = ?, canonical_url = ?, source_domain = ?, fetch_status = ?,
+                        fetched_at = ?, author = ?, site_name = ?, is_done = ?, updated_at = ?
                     WHERE rel_path = ?
                     """,
                     (
@@ -979,6 +1092,13 @@ class TeamStore:
                         int(new_paper.file_size),
                         new_paper.modified_at,
                         new_paper.preview_kind,
+                        getattr(new_paper, "resource_kind", "paper"),
+                        getattr(new_paper, "source_url", None),
+                        getattr(new_paper, "source_domain", None),
+                        getattr(new_paper, "fetch_status", "ok"),
+                        getattr(new_paper, "fetched_at", None),
+                        getattr(new_paper, "author", None),
+                        getattr(new_paper, "site_name", None),
                         1 if new_paper.is_done else 0,
                         self._timestamp(),
                         old_rel_path,
@@ -1001,27 +1121,80 @@ class TeamStore:
         source_type: str,
         source_value: str,
         source_url: str | None = None,
+        source_context: str | None = None,
+        sender_open_id: str | None = None,
+        message_time_iso: str | None = None,
         imported_by_user_id: int | None = None,
     ) -> None:
         normalized_source_value = self._normalize_source_value(source_type, source_value)
         if not normalized_source_value:
             return
+        canonical_types = {"arxiv", "openreview", "pdf_url", "canonical_url"}
         with self._write_lock:
             with self._connect() as conn:
                 paper_id = self._paper_id_for_rel_path_locked(conn, rel_path)
                 if paper_id is None:
                     return
-                conn.execute(
-                    """
-                    INSERT INTO paper_sources(paper_id, source_type, source_value, source_url, imported_by_user_id, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(source_type, source_value) DO UPDATE SET
-                        paper_id = excluded.paper_id,
-                        source_url = COALESCE(excluded.source_url, paper_sources.source_url),
-                        imported_by_user_id = COALESCE(excluded.imported_by_user_id, paper_sources.imported_by_user_id)
-                    """,
-                    (paper_id, source_type, normalized_source_value, source_url, imported_by_user_id, self._timestamp()),
+                values = (
+                    paper_id,
+                    source_type,
+                    normalized_source_value,
+                    source_url,
+                    source_context,
+                    sender_open_id,
+                    message_time_iso,
+                    imported_by_user_id,
+                    self._timestamp(),
                 )
+                if source_type in canonical_types:
+                    conn.execute(
+                        """
+                        INSERT INTO paper_sources(
+                            paper_id, source_type, source_value, source_url, source_context,
+                            sender_open_id, message_time_iso, imported_by_user_id, created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(source_type, source_value)
+                        WHERE source_type IN ('arxiv', 'openreview', 'pdf_url', 'canonical_url')
+                        DO UPDATE SET
+                            paper_id = excluded.paper_id,
+                            source_url = COALESCE(excluded.source_url, paper_sources.source_url),
+                            imported_by_user_id = COALESCE(excluded.imported_by_user_id, paper_sources.imported_by_user_id)
+                        """,
+                        values,
+                    )
+                    return
+
+                existing = conn.execute(
+                    """
+                    SELECT id FROM paper_sources
+                    WHERE paper_id = ? AND source_type = ? AND source_value = ?
+                      AND COALESCE(source_url, '') = COALESCE(?, '')
+                      AND COALESCE(message_time_iso, '') = COALESCE(?, '')
+                    ORDER BY id DESC LIMIT 1
+                    """,
+                    (paper_id, source_type, normalized_source_value, source_url, message_time_iso),
+                ).fetchone()
+                if existing is None:
+                    conn.execute(
+                        """
+                        INSERT INTO paper_sources(
+                            paper_id, source_type, source_value, source_url, source_context,
+                            sender_open_id, message_time_iso, imported_by_user_id, created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        values,
+                    )
+                else:
+                    conn.execute(
+                        """
+                        UPDATE paper_sources
+                        SET source_context = COALESCE(?, source_context),
+                            sender_open_id = COALESCE(?, sender_open_id),
+                            imported_by_user_id = COALESCE(?, imported_by_user_id)
+                        WHERE id = ?
+                        """,
+                        (source_context, sender_open_id, imported_by_user_id, int(existing["id"])),
+                    )
 
     def find_paper_by_source(self, source_type: str, source_value: str) -> str | None:
         normalized_source_value = self._normalize_source_value(source_type, source_value)
@@ -1076,7 +1249,10 @@ class TeamStore:
             if paper_id is None:
                 return []
             rows = conn.execute(
-                "SELECT source_type, source_value, source_url FROM paper_sources WHERE paper_id = ? ORDER BY created_at DESC",
+                """
+                SELECT source_type, source_value, source_url, source_context, sender_open_id, message_time_iso
+                FROM paper_sources WHERE paper_id = ? ORDER BY created_at DESC, id DESC
+                """,
                 (paper_id,),
             ).fetchall()
         return [
@@ -1084,6 +1260,9 @@ class TeamStore:
                 "source_type": str(row["source_type"]),
                 "source_value": str(row["source_value"]),
                 "source_url": (str(row["source_url"]) if row["source_url"] else None),
+                "source_context": (str(row["source_context"]) if row["source_context"] else None),
+                "sender_open_id": (str(row["sender_open_id"]) if row["sender_open_id"] else None),
+                "message_time_iso": (str(row["message_time_iso"]) if row["message_time_iso"] else None),
             }
             for row in rows
         ]
@@ -1658,9 +1837,15 @@ class TeamStore:
                     "source_type": str(row["source_type"]),
                     "source_value": str(row["source_value"]),
                     "source_url": (str(row["source_url"]) if row["source_url"] else None),
+                    "source_context": (str(row["source_context"]) if row["source_context"] else None),
+                    "sender_open_id": (str(row["sender_open_id"]) if row["sender_open_id"] else None),
+                    "message_time_iso": (str(row["message_time_iso"]) if row["message_time_iso"] else None),
                 }
                 for row in conn.execute(
-                    "SELECT source_type, source_value, source_url FROM paper_sources WHERE paper_id = ? ORDER BY created_at DESC",
+                    """
+                    SELECT source_type, source_value, source_url, source_context, sender_open_id, message_time_iso
+                    FROM paper_sources WHERE paper_id = ? ORDER BY created_at DESC, id DESC
+                    """,
                     (paper_id,),
                 ).fetchall()
             ]

@@ -8,6 +8,7 @@ from olefile import OleFileIO
 from pypdf import PdfReader
 
 ALLOWED_EXTENSIONS = {".pdf", ".doc", ".docx"}
+LIBRARY_EXTENSIONS = ALLOWED_EXTENSIONS | {".md"}
 NAMESPACE = {
     "cp": "http://schemas.openxmlformats.org/package/2006/metadata/core-properties",
     "dc": "http://purl.org/dc/elements/1.1/",
@@ -123,6 +124,18 @@ def extract_doc_metadata(path: Path) -> dict[str, str]:
     return {"title": title, "preview_text": "", "full_text": ""}
 
 
+def extract_markdown_metadata(path: Path, *, include_full_text: bool = False) -> dict[str, str]:
+    text = path.read_text(encoding="utf-8", errors="replace")
+    title = path.stem
+    for line in text.splitlines():
+        heading = line.strip()
+        if heading.startswith("# "):
+            title = heading[2:].strip() or title
+            break
+    preview_text = text[:20000]
+    return {"title": title, "preview_text": preview_text, "full_text": text if include_full_text else ""}
+
+
 def extract_document_metadata(path: Path, *, include_full_text: bool = False) -> dict[str, str]:
     suffix = path.suffix.lower()
     if suffix == ".pdf":
@@ -131,6 +144,8 @@ def extract_document_metadata(path: Path, *, include_full_text: bool = False) ->
         return extract_docx_metadata(path, include_full_text=include_full_text)
     if suffix == ".doc":
         return extract_doc_metadata(path)
+    if suffix == ".md":
+        return extract_markdown_metadata(path, include_full_text=include_full_text)
     raise UnsupportedDocumentError(f"Unsupported file type: {suffix}")
 
 
@@ -140,6 +155,8 @@ def extract_document_text(path: Path) -> str:
         return extract_pdf_metadata(path, include_full_text=True)["full_text"]
     if suffix == ".docx":
         return extract_docx_metadata(path, include_full_text=True)["full_text"]
+    if suffix == ".md":
+        return extract_markdown_metadata(path, include_full_text=True)["full_text"]
     if suffix == ".doc":
         raise UnsupportedDocumentError("Legacy .doc files cannot be text-extracted in this environment.")
     raise UnsupportedDocumentError(f"Unsupported file type: {suffix}")

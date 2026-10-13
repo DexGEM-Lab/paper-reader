@@ -33,7 +33,7 @@ DEFAULT_USER_PROMPT = (
 )
 ProgressCallback = Callable[[int, str], None]
 AbortCallback = Callable[[], bool]
-SUPPORTED_SUMMARY_EXTENSIONS = {".pdf", ".doc", ".docx"}
+SUPPORTED_SUMMARY_EXTENSIONS = {".pdf", ".doc", ".docx", ".md"}
 
 
 class SafePromptValues(dict[str, str]):

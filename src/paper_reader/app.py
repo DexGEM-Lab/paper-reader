@@ -13,7 +13,7 @@ import threading
 import time
 import uuid
 from urllib.error import HTTPError, URLError
-from urllib.parse import parse_qs, unquote, urlencode, urlparse
+from urllib.parse import unquote, urlencode, urlparse
 from urllib.request import Request, urlopen
 import zipfile
 from dataclasses import asdict, dataclass, replace
@@ -41,18 +41,20 @@ from .arxiv_markdown import (
 from .chat_ai import stream_answer_question_about_document
 from .chat_queue import PaperChatQueue
 from .config import PaperReaderConfig, load_config, load_env_file_values, normalize_public_base_url
-from .document_utils import ALLOWED_EXTENSIONS, extract_document_metadata
+from .document_utils import ALLOWED_EXTENSIONS, LIBRARY_EXTENSIONS, extract_document_metadata
 from .insights_history import HistoricalInsightsStore, extract_digest
 from .llm import resolve_model
 from .insights_momentum import MomentumInsightsStore
 from .insights_opportunity import OpportunityInsightsStore
 from .markdown_render import render_markdown
+from .netutils import fetch_public_url
 from .offline_package import build_offline_manifest, manifest_json as build_manifest_json, offline_prompt_arcname, offline_source_arcname
 from .prompt_manager import DEFAULT_PROMPT_SLUG, PromptDefinition, PromptStore, parse_checkbox
 from .settings import SettingsStore
 from .source_archive import day_paper_map, load_source_day, load_source_days, local_pdf_path_for
 from .task_queue import PaperJobQueue
 from .team_store import TeamStore, TeamUser, flatten_comments, slugify_text
+from .web_resources import ImportTarget, WebResourceStore, classify_import_target
 
 CACHE_FILE_NAME = ".paper_reader_index.json"
 DONE_INDEX_FILE_NAME = ".paper_reader_done_index.json"
@@ -65,9 +67,8 @@ ALLOWED_AVATAR_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 DEFAULT_BATCH_PANEL_PAGE_SIZE = 50
 MAX_LOGIN_FAILURES = 3
 LOGIN_LOCK_SECONDS = 5 * 60
-REMOTE_PDF_DOWNLOAD_TIMEOUT = 180
+REMOTE_PDF_DOWNLOAD_TIMEOUT = 30
 REMOTE_PDF_DOWNLOAD_ATTEMPTS = 3
-REMOTE_PDF_DOWNLOAD_CHUNK_SIZE = 128 * 1024
 FEISHU_LOGIN_REDIRECT_PATH = "/auth/feishu/callback"
 FEISHU_AUTH_PAGE_URL = "https://open.feishu.cn/open-apis/authen/v1/index"
 FEISHU_APP_ACCESS_TOKEN_URL = "https://open.feishu.cn/open-apis/auth/v3/app_access_token/internal"
@@ -125,6 +126,13 @@ class PaperRecord:
     prompt_result_count: int
     prompt_result_slugs: list[str]
     is_done: bool
+    resource_kind: str = "paper"
+    source_url: str | None = None
+    source_domain: str | None = None
+    fetch_status: str = "ok"
+    fetched_at: str | None = None
+    author: str | None = None
+    site_name: str | None = None
 
 
 @dataclass
@@ -319,13 +327,17 @@ def normalize_import_target(raw_target: str) -> str:
         return ""
 
     lowered = target.lower()
-    arxiv_prefix_match = re.fullmatch(r"arxiv[:\s]+(\d{4}\.\d{4,5}(?:v\d+)?)", lowered, flags=re.IGNORECASE)
+    arxiv_prefix_match = re.fullmatch(
+        r"arxiv[:\s]+([a-z-]+(?:\.[a-z]{2})?/\d{7}(?:v\d+)?|\d{4}\.\d{4,5}(?:v\d+)?)",
+        lowered,
+        flags=re.IGNORECASE,
+    )
     if arxiv_prefix_match:
         return arxiv_prefix_match.group(1)
 
     if lowered.startswith("arxiv.org/") or lowered.startswith("www.arxiv.org/"):
         return f"https://{target.lstrip('/')}"
-    if lowered.startswith("abs/") or lowered.startswith("pdf/"):
+    if lowered.startswith("abs/") or lowered.startswith("pdf/") or lowered.startswith("html/"):
         return f"https://arxiv.org/{target.lstrip('/')}"
 
     return target
@@ -362,9 +374,9 @@ def parse_import_targets(raw_target: str) -> list[str]:
         r"""
         https?://[^\s,]+
         |(?:www\.)?arxiv\.org/[^\s,]+
-        |(?:abs|pdf)/[^\s,]+
-        |arxiv[:\s]+\d{4}\.\d{4,5}(?:v\d+)?
-        |\d{4}\.\d{4,5}(?:v\d+)?
+        |(?:abs|pdf|html)/[^\s,]+
+        |arxiv[:\s]+(?:[a-z-]+(?:\.[a-z]{2})?/\d{7}(?:v\d+)?|\d{4}\.\d{4,5}(?:v\d+)?)
+        |(?:[a-z-]+(?:\.[a-z]{2})?/\d{7}(?:v\d+)?|\d{4}\.\d{4,5}(?:v\d+)?)
         """,
         flags=re.IGNORECASE | re.VERBOSE,
     )
@@ -401,6 +413,7 @@ class PaperLibrary:
         self.summary_root.mkdir(parents=True, exist_ok=True)
         self.arxiv_markdown_root = self.root / ARXIV_MARKDOWN_DIR_NAME
         self.arxiv_markdown_root.mkdir(parents=True, exist_ok=True)
+        self.web_resources = WebResourceStore(self.root)
         self.prompt_store = prompt_store
         self.team_store = team_store
         self._hash_cache: dict[str, tuple[float, int, str]] = {}
@@ -453,7 +466,10 @@ class PaperLibrary:
                 continue
             if not include_done and DONE_DIR_NAME in path.parts:
                 continue
-            if path.suffix.lower() not in ALLOWED_EXTENSIONS:
+            relative_parts = path.relative_to(self.root).parts
+            if any(part.startswith(".") for part in relative_parts[:-1]):
+                continue
+            if path.suffix.lower() not in LIBRARY_EXTENSIONS:
                 continue
             documents.append(path)
         return documents
@@ -467,7 +483,7 @@ class PaperLibrary:
         for path in sorted(done_root.rglob("*")):
             if not path.is_file():
                 continue
-            if path.suffix.lower() not in ALLOWED_EXTENSIONS:
+            if path.suffix.lower() not in LIBRARY_EXTENSIONS:
                 continue
             documents.append(path)
         return documents
@@ -580,6 +596,13 @@ class PaperLibrary:
             prompt_result_count=len(active_result_slugs),
             prompt_result_slugs=stored_slugs,
             is_done=record.is_done,
+            resource_kind=record.resource_kind,
+            source_url=record.source_url,
+            source_domain=record.source_domain,
+            fetch_status=record.fetch_status,
+            fetched_at=record.fetched_at,
+            author=record.author,
+            site_name=record.site_name,
         )
 
     def _load_active_index_payload(self) -> dict[str, Any]:
@@ -768,7 +791,19 @@ class PaperLibrary:
 
         title = self._safe_text(meta.get("title") or path.stem)
         preview_text = self._safe_text(meta.get("preview_text") or "")
+        resource_metadata = self.web_resources.metadata_for_rel_path(rel_path) or {}
+        if resource_metadata.get("title"):
+            title = self._safe_text(str(resource_metadata["title"]))
         date_info = self._extract_date(title, preview_text, path.name)
+        resource_sort_date = str(resource_metadata.get("sort_date") or "").strip()
+        resource_published_date = str(resource_metadata.get("published_date") or "").strip()
+        if resource_sort_date:
+            date_info = {
+                "display_date": resource_published_date or resource_sort_date,
+                "precision": "day",
+                "source": "web_metadata",
+                "sort_date": resource_sort_date,
+            }
         manual_date = self._manual_date_override_from_payload(manual_date_overrides, rel_path)
         if manual_date is not None:
             date_info = manual_date
@@ -794,6 +829,13 @@ class PaperLibrary:
             prompt_result_count=len(visible_prompt_result_slugs),
             prompt_result_slugs=all_prompt_result_slugs,
             is_done=self.is_done_rel_path(rel_path),
+            resource_kind=str(resource_metadata.get("resource_kind") or "paper"),
+            source_url=(str(resource_metadata.get("canonical_url")) if resource_metadata.get("canonical_url") else None),
+            source_domain=(str(resource_metadata.get("source_domain")) if resource_metadata.get("source_domain") else None),
+            fetch_status=str(resource_metadata.get("fetch_status") or "ok"),
+            fetched_at=(str(resource_metadata.get("fetched_at")) if resource_metadata.get("fetched_at") else None),
+            author=(str(resource_metadata.get("author")) if resource_metadata.get("author") else None),
+            site_name=(str(resource_metadata.get("site_name")) if resource_metadata.get("site_name") else None),
         )
 
     def _safe_text(self, value: str) -> str:
@@ -896,6 +938,7 @@ class PaperLibrary:
             ".pdf": "pdf",
             ".docx": "docx",
             ".doc": "doc",
+            ".md": "web" if self.web_resources.metadata_for_rel_path(path.relative_to(self.root).as_posix()) else "markdown",
         }.get(path.suffix.lower(), "download")
 
     def _extract_date(self, title: str, preview_text: str, file_name: str) -> dict[str, str | None]:
@@ -1156,6 +1199,14 @@ class PaperLibrary:
             new_arxiv_meta.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(old_arxiv_meta), str(new_arxiv_meta))
 
+        old_path = self.resolve_relative_path(old_rel_path)
+        new_path = self.resolve_relative_path(new_rel_path)
+        old_web_meta = self.web_resources.metadata_path_for(old_path)
+        new_web_meta = self.web_resources.metadata_path_for(new_path)
+        if old_web_meta.exists():
+            new_web_meta.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(old_web_meta), str(new_web_meta))
+
     def create_folder(self, rel_folder: str) -> Path:
         rel_folder = rel_folder.strip().strip("/")
         if not rel_folder:
@@ -1172,8 +1223,8 @@ class PaperLibrary:
         filename = secure_filename(new_name)
         if not filename:
             raise ValueError("Invalid target file name")
-        if Path(filename).suffix.lower() not in ALLOWED_EXTENSIONS:
-            raise ValueError("Only PDF / DOC / DOCX files are allowed")
+        if Path(filename).suffix.lower() not in LIBRARY_EXTENSIONS:
+            raise ValueError("Only PDF / DOC / DOCX / Markdown files are allowed")
         destination = source.with_name(filename)
         if destination.exists() and destination != source:
             raise ValueError("Target file already exists")
@@ -1197,7 +1248,9 @@ class PaperLibrary:
         target = self.resolve_relative_path(rel_path)
         if not target.exists() or not target.is_file():
             raise FileNotFoundError(rel_path)
+        web_metadata_path = self.web_resources.metadata_path_for(target)
         target.unlink()
+        web_metadata_path.unlink(missing_ok=True)
         self._hash_cache.pop(rel_path, None)
         self._delete_manual_date(rel_path)
         self.clear_derived_artifacts(rel_path)
@@ -1298,6 +1351,8 @@ class PaperLibrary:
         document_path = self.resolve_relative_path(rel_path)
         explicit_ids = self._arxiv_source_ids_for(rel_path)
         explicit_id = explicit_ids[0] if explicit_ids else None
+        if self.web_resources.metadata_for_rel_path(rel_path) is not None:
+            return explicit_id
         inferred_id = infer_arxiv_id_from_path(document_path)
         if explicit_id and inferred_id and base_arxiv_id(explicit_id) == base_arxiv_id(inferred_id):
             return choose_preferred_arxiv_id(inferred_id, explicit_id)
@@ -1610,9 +1665,20 @@ def format_source_type(source_type: str) -> str:
         "arxiv": "arXiv",
         "openreview": "OpenReview",
         "pdf_url": "PDF 链接",
+        "canonical_url": "网页",
+        "feishu": "飞书",
         "huggingface_daily_papers": "Hugging Face Daily",
     }
     return mapping.get(source_type, source_type.replace("_", " ").strip().title())
+
+
+def format_resource_kind(resource_kind: str) -> str:
+    return {
+        "paper": "PAPER",
+        "article": "ARTICLE",
+        "project": "PROJECT SITE",
+        "news": "NEWS",
+    }.get(resource_kind, resource_kind.replace("_", " ").upper())
 
 
 def sha256_for_path(path: Path) -> str:
@@ -2020,6 +2086,7 @@ def create_app(
     app.config["LLM_ALLOWED_MODELS"] = runtime_config.llm_allowed_models
     app.config["LLM_QPS"] = runtime_config.llm_qps
     app.config["LLM_TIMEOUT"] = runtime_config.llm_timeout
+    app.config["MAX_CONTENT_LENGTH"] = runtime_config.max_upload_bytes
     app.config["SESSION_COOKIE_HTTPONLY"] = True
     app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
     app.settings_store = SettingsStore(app.config["LIBRARY_ROOT"])  # type: ignore[attr-defined]
@@ -2180,6 +2247,7 @@ def create_app(
         return {
             "format_bytes": format_bytes,
             "format_source_type": format_source_type,
+            "format_resource_kind": format_resource_kind,
             "allowed_extensions": ", ".join(sorted(ALLOWED_EXTENSIONS)),
             "current_user": user,
             "is_admin": bool(user and user.role == "admin"),
@@ -2547,99 +2615,30 @@ def create_app(
         }
 
 
-    def resolve_import_target(raw_target: str) -> dict[str, str]:
-        target = normalize_import_target(raw_target)
-        if not target:
-            raise ValueError("请填写 arXiv ID、论文链接或 PDF 链接。")
-
-        arxiv_match = re.fullmatch(r"\d{4}\.\d{4,5}(?:v\d+)?", target)
-        if arxiv_match:
-            paper_id = arxiv_match.group(0)
-            stable_paper_id = base_arxiv_id(paper_id)
-            return {
-                "source_type": "arxiv",
-                "source_value": paper_id,
-                "source_url": f"https://arxiv.org/abs/{paper_id}",
-                "download_url": f"https://arxiv.org/pdf/{paper_id}.pdf",
-                "target_folder": "Imports/arXiv",
-                "preferred_name": f"{stable_paper_id}.pdf",
-            }
-
-        parsed = urlparse(target)
-        if parsed.scheme not in {"http", "https"}:
-            raise ValueError("当前只支持 arXiv ID、HTTP/HTTPS 论文链接或 PDF 链接。")
-
-        host = (parsed.netloc or "").lower()
-        path = parsed.path or ""
-        if host.endswith("arxiv.org"):
-            arxiv_url_match = re.search(r"(\d{4}\.\d{4,5}(?:v\d+)?)", target)
-            if arxiv_url_match is None:
-                raise ValueError("无法从 arXiv 链接中识别论文 ID。")
-            paper_id = arxiv_url_match.group(1)
-            stable_paper_id = base_arxiv_id(paper_id)
-            return {
-                "source_type": "arxiv",
-                "source_value": paper_id,
-                "source_url": f"https://arxiv.org/abs/{paper_id}",
-                "download_url": f"https://arxiv.org/pdf/{paper_id}.pdf",
-                "target_folder": "Imports/arXiv",
-                "preferred_name": f"{stable_paper_id}.pdf",
-            }
-
-        if host.endswith("openreview.net") and (path.endswith(".pdf") or path.rstrip("/") == "/pdf"):
-            query_params = parse_qs(parsed.query or "")
-            openreview_id = (query_params.get("id") or [""])[0].strip()
-            preferred_name = Path(path).name or ""
-            if not preferred_name or preferred_name == "pdf":
-                preferred_name = f"{openreview_id or 'openreview-paper'}.pdf"
-            elif not preferred_name.lower().endswith(".pdf"):
-                preferred_name = f"{preferred_name}.pdf"
-            return {
-                "source_type": "openreview",
-                "source_value": target,
-                "source_url": target,
-                "download_url": target,
-                "target_folder": "Imports/OpenReview",
-                "preferred_name": preferred_name,
-            }
-
-        if path.endswith(".pdf"):
-            preferred_name = Path(path).name or "paper.pdf"
-            return {
-                "source_type": "pdf_url",
-                "source_value": target,
-                "source_url": target,
-                "download_url": target,
-                "target_folder": "Imports/Links",
-                "preferred_name": preferred_name,
-            }
-
-        raise ValueError("暂时只支持 arXiv ID / arXiv 链接 / OpenReview PDF 链接 / 直接 PDF 链接。")
+    def resolve_import_target(raw_target: str) -> dict[str, Any]:
+        target = classify_import_target(normalize_import_target(raw_target))
+        return asdict(target)
 
     def download_remote_pdf(download_url: str) -> Path:
         last_error: Exception | None = None
         for attempt in range(1, REMOTE_PDF_DOWNLOAD_ATTEMPTS + 1):
             temp_path: Path | None = None
             try:
-                request_obj = Request(
+                response = fetch_public_url(
                     download_url,
-                    headers={
-                        "User-Agent": "paper-reader/1.0",
-                        "Accept": "application/pdf,*/*",
-                    },
+                    accept="application/pdf,*/*;q=0.1",
+                    timeout=REMOTE_PDF_DOWNLOAD_TIMEOUT,
                 )
-                with urlopen(request_obj, timeout=REMOTE_PDF_DOWNLOAD_TIMEOUT) as response, tempfile.NamedTemporaryFile(
+                if not response.body.startswith(b"%PDF-"):
+                    raise RuntimeError("The remote response is not a PDF document.")
+                with tempfile.NamedTemporaryFile(
                     prefix="paper-reader-import-",
                     suffix=".pdf",
                     delete=False,
                 ) as handle:
                     temp_path = Path(handle.name)
-                    while True:
-                        chunk = response.read(REMOTE_PDF_DOWNLOAD_CHUNK_SIZE)
-                        if not chunk:
-                            break
-                        handle.write(chunk)
-                    return temp_path
+                    handle.write(response.body)
+                return temp_path
             except Exception as exc:
                 last_error = exc
                 if temp_path is not None:
@@ -2710,8 +2709,9 @@ def create_app(
     def describe_import_source(source_type: str) -> str:
         mapping = {
             "arxiv": "arXiv",
-            "openreview": "OpenReview PDF",
+            "openreview": "OpenReview",
             "pdf_url": "PDF 链接",
+            "canonical_url": "网页",
         }
         return mapping.get(source_type, source_type)
 
@@ -2735,7 +2735,7 @@ def create_app(
     def submit_remote_import_action(raw_targets: str, recommendation_reason: str, actor: TeamUser) -> ActionRecord:
         parsed_targets = parse_import_targets(raw_targets)
         if not parsed_targets:
-            raise ValueError("请填写 arXiv ID、论文链接或 PDF 链接。")
+            raise ValueError("请填写 arXiv ID 或 HTTP/HTTPS 研究链接。")
         title = f"远程导入（{len(parsed_targets)} 项）" if len(parsed_targets) > 1 else f"远程导入：{parsed_targets[0]}"
         return app.action_queue.submit(  # type: ignore[attr-defined]
             kind="remote-import",
@@ -2796,6 +2796,30 @@ def create_app(
             return None
         return app.library.arxiv_markdown_status_for_rel_path(rel_path)  # type: ignore[attr-defined]
 
+    def record_action_provenance(action: ActionRecord, rel_path: str, target: str) -> None:
+        entries = action.payload.get("provenance") or []
+        if not isinstance(entries, list):
+            return
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            entry_url = str(entry.get("url") or "").strip()
+            if entry_url and entry_url != target:
+                continue
+            source_value = str(entry.get("chat_name") or "").strip()
+            if not source_value:
+                continue
+            app.team_store.add_source(  # type: ignore[attr-defined]
+                rel_path,
+                source_type="feishu",
+                source_value=source_value,
+                source_url=target,
+                source_context=str(entry.get("context_text") or "").strip() or None,
+                sender_open_id=str(entry.get("sender_open_id") or "").strip() or None,
+                message_time_iso=str(entry.get("msg_time_iso") or "").strip() or None,
+                imported_by_user_id=action.requested_by_user_id,
+            )
+
     def perform_remote_import_action(
         action: ActionRecord,
         report: Callable[[int, str, dict[str, Any] | None], None],
@@ -2807,7 +2831,7 @@ def create_app(
 
         targets = parse_import_targets(raw_targets)
         if not targets:
-            raise ValueError("请填写 arXiv ID、论文链接或 PDF 链接。")
+            raise ValueError("请填写 arXiv ID 或 HTTP/HTTPS 研究链接。")
 
         unique_targets: list[str] = []
         seen_targets: set[str] = set()
@@ -2841,6 +2865,13 @@ def create_app(
 
             item["source"] = resolved
             existing_rel_path = app.team_store.find_paper_by_source(resolved["source_type"], resolved["source_value"])  # type: ignore[attr-defined]
+            if existing_rel_path and resolved.get("route") == "web":
+                update_action_item(items, key=target, status="downloading", message="已在库中，正在刷新网页快照。", source=resolved)
+                pending_downloads.append(
+                    {"target": target, "resolved": resolved, "existing_rel_path": existing_rel_path, "refresh": True}
+                )
+                report(action_progress_percent(items), f"正在刷新：{target}", build_action_result_payload(items))
+                continue
             if existing_rel_path:
                 if should_upgrade_existing_arxiv(existing_rel_path, resolved):
                     update_action_item(items, key=target, status="downloading", message="检测到 arXiv 新版本，正在下载并覆盖旧版本。", source=resolved)
@@ -2854,21 +2885,33 @@ def create_app(
                 if markdown_status and markdown_status.get("cached"):
                     existing_message = "已在库中，已确认可直接使用 arXiv Markdown。"
                 update_action_item(items, key=target, status="existing", message=existing_message, rel_path=existing_rel_path, source=resolved)
+                record_action_provenance(action, existing_rel_path, target)
                 rel_paths_for_jobs.append(existing_rel_path)
                 if actor is not None:
                     submit_remote_import_jobs([existing_rel_path], actor, source="remote-import-batch")
                 report(action_progress_percent(items), f"已存在：{target}", build_action_result_payload(items))
                 continue
 
-            update_action_item(items, key=target, status="downloading", message="正在下载 PDF。", source=resolved)
+            if resolved.get("route") == "web":
+                update_action_item(items, key=target, status="downloading", message="正在抓取并提取网页正文。", source=resolved)
+            else:
+                update_action_item(items, key=target, status="downloading", message="正在下载 PDF。", source=resolved)
             pending_downloads.append({"target": target, "resolved": resolved})
         if pending_downloads:
             max_workers = min(4, len(pending_downloads))
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                future_map = {
-                    executor.submit(download_remote_pdf, item["resolved"]["download_url"]): item  # type: ignore[index]
-                    for item in pending_downloads
-                }
+                future_map = {}
+                for pending in pending_downloads:
+                    resolved_target = pending["resolved"]
+                    if resolved_target.get("route") == "web":
+                        future = executor.submit(
+                            app.library.web_resources.fetch_and_store,  # type: ignore[attr-defined]
+                            ImportTarget(**resolved_target),
+                            existing_rel_path=(str(pending.get("existing_rel_path") or "") or None),
+                        )
+                    else:
+                        future = executor.submit(download_remote_pdf, resolved_target["download_url"])
+                    future_map[future] = pending
                 for future in as_completed(future_map):
                     if should_abort():
                         raise InterruptedError("Import interrupted.")
@@ -2877,12 +2920,42 @@ def create_app(
                     resolved = item["resolved"]
                     upgrade_rel_path = str(item.get("existing_rel_path") or "") or None
                     try:
-                        temp_path = future.result()
+                        fetched_result = future.result()
                     except Exception as exc:
                         update_action_item(items, key=target, status="failed", message=f"下载失败：{exc}", source=resolved)
                         report(action_progress_percent(items), f"下载失败：{target}", build_action_result_payload(items))
                         continue
 
+                    if resolved.get("route") == "web":
+                        snapshot = fetched_result
+                        rel_path = str(snapshot.rel_path)
+                        app.library._update_active_index_entry(rel_path)  # type: ignore[attr-defined]
+                        active_prompt_slugs = [prompt.slug for prompt in app.prompt_store.active_prompts()]  # type: ignore[attr-defined]
+                        imported_record = app.library.build_record_for_rel_path(rel_path, active_prompt_slugs)  # type: ignore[attr-defined]
+                        app.team_store.sync_papers([imported_record])  # type: ignore[attr-defined]
+                        app.team_store.add_source(  # type: ignore[attr-defined]
+                            rel_path,
+                            source_type=resolved["source_type"],
+                            source_value=resolved["source_value"],
+                            source_url=resolved["source_url"],
+                            imported_by_user_id=requested_by_user_id,
+                        )
+                        record_action_provenance(action, rel_path, target)
+                        if recommendation_reason.strip() and actor is not None:
+                            app.team_store.add_recommendation(rel_path, actor.id, recommendation_reason)  # type: ignore[attr-defined]
+                        if snapshot.fetch_status == "ok":
+                            item_status = "existing" if item.get("refresh") else "saved"
+                            message = "网页快照已刷新。" if item.get("refresh") else "网页正文已提取并入库。"
+                            update_action_item(items, key=target, status=item_status, message=message, rel_path=rel_path, source=resolved)
+                            rel_paths_for_jobs.append(rel_path)
+                            report(action_progress_percent(items), f"完成：{target}", build_action_result_payload(items))
+                        else:
+                            message = f"已创建条目，但抓取状态为 {snapshot.fetch_status}：{snapshot.error or '无法提取正文'}"
+                            update_action_item(items, key=target, status="failed", message=message, rel_path=rel_path, source=resolved)
+                            report(action_progress_percent(items), f"抓取失败但已保留条目：{target}", build_action_result_payload(items))
+                        continue
+
+                    temp_path = fetched_result
                     try:
                         update_action_item(items, key=target, status="importing", message="下载完成，正在入库。", source=resolved)
                         report(action_progress_percent(items), f"正在入库：{target}", build_action_result_payload(items))
@@ -2922,6 +2995,7 @@ def create_app(
                         source_url=resolved["source_url"],
                         imported_by_user_id=requested_by_user_id,
                     )
+                    record_action_provenance(action, rel_path, target)
                     markdown_status = try_prefetch_arxiv_markdown(rel_path)
                     if recommendation_reason.strip() and actor is not None:
                         app.team_store.add_recommendation(rel_path, actor.id, recommendation_reason)  # type: ignore[attr-defined]
@@ -3471,6 +3545,7 @@ def create_app(
         selected_prompt_info: dict[str, Any] | None = None
         selected_prompt_job: dict[str, Any] | None = None
         selected_share_payload: dict[str, str] | None = None
+        selected_web_html: Markup | None = None
         viewer_tabs: list[dict[str, Any]] = []
         selected_arxiv_markdown_status: dict[str, Any] = {
             "available": False,
@@ -3505,6 +3580,12 @@ def create_app(
             selected_share_payload = share_payload_for_paper(selected_paper)
             if selected_paper.preview_text:
                 preview_paragraphs = [chunk.strip() for chunk in selected_paper.preview_text.split("\n\n") if chunk.strip()]
+            if selected_paper.preview_kind in {"web", "markdown"}:
+                try:
+                    snapshot_markdown = app.library.resolve_relative_path(selected_paper.rel_path).read_text(encoding="utf-8")  # type: ignore[attr-defined]
+                    selected_web_html = Markup(render_markdown(snapshot_markdown))
+                except OSError:
+                    selected_web_html = None
             selected_arxiv_markdown_status = app.library.arxiv_markdown_status_for_rel_path(selected_paper.rel_path)  # type: ignore[attr-defined]
             selected_paper_context = app.team_store.paper_context(  # type: ignore[attr-defined]
                 selected_paper.rel_path,
@@ -3586,6 +3667,7 @@ def create_app(
             selected_prompt_info=selected_prompt_info,
             selected_prompt_job=selected_prompt_job,
             selected_share_payload=selected_share_payload,
+            selected_web_html=selected_web_html,
             selected_arxiv_markdown_status=selected_arxiv_markdown_status,
             selected_paper_context=selected_paper_context,
             selected_chat_context=selected_chat_context,
@@ -4374,6 +4456,23 @@ def create_app(
         except Exception as exc:
             flash(f"导入没成功：{exc}", "error")
             return redirect_to_index(current_folder, query, sort_by, show_done=show_done)
+
+    @app.post("/resource/retry")
+    def resource_retry_route() -> Any:
+        rel_path = request.form.get("rel_path", "").strip("/")
+        actor = current_user()
+        if actor is None:
+            return {"error": "unauthorized"}, 401
+        metadata = app.library.web_resources.metadata_for_rel_path(rel_path)  # type: ignore[attr-defined]
+        if not metadata or not metadata.get("canonical_url"):
+            flash("这个条目没有可重试的网页来源。", "error")
+            return redirect_to_index("", "", "date_desc", rel_path or None, "source")
+        try:
+            task = submit_remote_import_action(str(metadata["canonical_url"]), "", actor)
+            flash(f"网页重试任务已开始：{task.title}", "success")
+        except Exception as exc:
+            flash(f"网页重试没成功：{exc}", "error")
+        return redirect_to_index("", "", "date_desc", rel_path or None, "source", show_done=True)
 
     @app.post("/prompt-batch-run")
     def prompt_batch_run_route() -> Any:

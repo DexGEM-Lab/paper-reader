@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import re
+from urllib.parse import urlsplit
 
 
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
@@ -317,7 +318,14 @@ def _render_image(alt: str, src: str) -> str:
 
 def _render_link(label: str, href: str) -> str:
     safe_label = html.escape(label)
-    safe_href = html.escape(href.strip(), quote=True)
+    candidate = href.strip()
+    try:
+        scheme = urlsplit(candidate).scheme.casefold()
+    except ValueError:
+        scheme = ""
+    if scheme not in {"http", "https", "mailto"}:
+        return safe_label
+    safe_href = html.escape(candidate, quote=True)
     return f'<a href="{safe_href}" target="_blank" rel="noreferrer">{safe_label}</a>'
 
 

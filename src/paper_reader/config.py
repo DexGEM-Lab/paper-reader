@@ -121,6 +121,7 @@ class PaperReaderConfig:
     llm_qps: float
     llm_timeout: float
     llm_context_tokens: int
+    max_upload_bytes: int
 
     @property
     def feishu_enabled(self) -> bool:
@@ -186,5 +187,9 @@ def load_config(
         llm_timeout=_positive_float_setting(setting("PAPER_READER_LLM_TIMEOUT", "120"), name="PAPER_READER_LLM_TIMEOUT"),
         llm_context_tokens=_positive_int_setting(
             setting("PAPER_READER_LLM_CONTEXT_TOKENS", "12000"), name="PAPER_READER_LLM_CONTEXT_TOKENS"
+        ),
+        max_upload_bytes=_positive_int_setting(
+            setting("PAPER_READER_MAX_UPLOAD_BYTES", str(100 * 1024 * 1024)),
+            name="PAPER_READER_MAX_UPLOAD_BYTES",
         ),
     )

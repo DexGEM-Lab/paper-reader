@@ -7,9 +7,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-from urllib.request import Request, urlopen
-
 from .document_utils import extract_document_metadata
+from .netutils import fetch_public_url
 
 ARXIV_MARKDOWN_DIR_NAME = ".paper-reader-arxiv-markdown"
 ARXIV_MARKDOWN_TIMEOUT_SECONDS = 30
@@ -94,16 +93,12 @@ def markdown_new_url_for(arxiv_id: str) -> str:
 
 def fetch_arxiv_markdown(arxiv_id: str, *, timeout: int = ARXIV_MARKDOWN_TIMEOUT_SECONDS) -> str:
     url = markdown_new_url_for(arxiv_id)
-    request = Request(
+    response = fetch_public_url(
         url,
-        headers={
-            "Accept": "text/markdown,text/plain;q=0.9,*/*;q=0.1",
-            "User-Agent": "paper-reader/1.0",
-        },
+        accept="text/markdown,text/plain;q=0.9,*/*;q=0.1",
+        timeout=timeout,
     )
-    with urlopen(request, timeout=timeout) as response:
-        payload = response.read()
-    text = payload.decode("utf-8", "replace").strip()
+    text = response.body.decode("utf-8", "replace").strip()
     if not text:
         raise RuntimeError(f"无法获取 arXiv Markdown：{arxiv_id}")
     return text

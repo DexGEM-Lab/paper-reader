@@ -20,6 +20,7 @@ from src.paper_reader.chat_queue import ChatJob
 from src.paper_reader.ai_summary import DEFAULT_USER_PROMPT
 from src.paper_reader.chat_ai import answer_question_about_document, build_chat_prompt
 from src.paper_reader.markdown_render import render_markdown
+from src.paper_reader.netutils import FetchedResponse
 from src.paper_reader.prompt_manager import DEFAULT_PROMPT_SLUG, LEGACY_DEFAULT_USER_PROMPT, PromptStore
 from src.paper_reader.team_store import TeamStore, generate_auto_tags
 
@@ -145,6 +146,15 @@ class PaperReaderAppTests(unittest.TestCase):
                 return payload
 
         return FakeResponse()
+
+    def fake_fetched_response(self, payload: bytes, url: str = "https://example.test/resource", content_type: str = "application/octet-stream") -> FetchedResponse:
+        return FetchedResponse(
+            requested_url=url,
+            final_url=url,
+            status=200,
+            headers={"Content-Type": content_type, "Content-Length": str(len(payload))},
+            body=payload,
+        )
 
     def fake_binary_response(self, payload: bytes):
         class FakeResponse:
@@ -778,7 +788,7 @@ class PaperReaderAppTests(unittest.TestCase):
         )
         handler = self.app.action_queue._handlers["remote-import"]
 
-        with patch.object(paper_reader_app_module, "urlopen", return_value=self.fake_binary_response(upgraded_bytes)):
+        with patch.object(paper_reader_app_module, "fetch_public_url", return_value=self.fake_fetched_response(upgraded_bytes, content_type="application/pdf")):
             with patch.object(
                 self.app.job_queue,
                 "submit",
@@ -822,14 +832,14 @@ class PaperReaderAppTests(unittest.TestCase):
         handler = self.app.action_queue._handlers["remote-import"]
         calls = {"count": 0}
 
-        def flaky_urlopen(request_obj, timeout=30):
+        def flaky_fetch(url, **kwargs):
             calls["count"] += 1
             if calls["count"] == 1:
                 raise TimeoutError("The read operation timed out")
-            self.assertEqual(timeout, paper_reader_app_module.REMOTE_PDF_DOWNLOAD_TIMEOUT)
-            return self.fake_binary_response(remote_bytes)
+            self.assertEqual(kwargs["timeout"], paper_reader_app_module.REMOTE_PDF_DOWNLOAD_TIMEOUT)
+            return self.fake_fetched_response(remote_bytes, url=url, content_type="application/pdf")
 
-        with patch.object(paper_reader_app_module, "urlopen", side_effect=flaky_urlopen):
+        with patch.object(paper_reader_app_module, "fetch_public_url", side_effect=flaky_fetch):
             with patch.object(paper_reader_app_module.time, "sleep") as mocked_sleep:
                 with patch.object(
                     self.app.job_queue,
@@ -3074,7 +3084,7 @@ class PaperReaderAppTests(unittest.TestCase):
         prompt = self.app.prompt_store.get_prompt(DEFAULT_PROMPT_SLUG)
         assert prompt is not None
 
-        with patch("src.paper_reader.arxiv_markdown.urlopen", return_value=self.fake_markdown_response("# arXiv markdown")):
+        with patch("src.paper_reader.arxiv_markdown.fetch_public_url", return_value=self.fake_fetched_response(b"# arXiv markdown", content_type="text/markdown")):
             with patch.object(paper_reader_app_module, "run_prompt_on_document", return_value="解读完成") as mocked_run:
                 with patch.object(self.app.library, "_maybe_refresh_ai_tags", return_value=None):
                     result_path, generated = self.app.library.generate_prompt_result(rel_path, prompt, force=True)
@@ -3119,7 +3129,7 @@ class PaperReaderAppTests(unittest.TestCase):
             model="gpt-5.4",
         )
 
-        with patch("src.paper_reader.arxiv_markdown.urlopen", return_value=self.fake_markdown_response("# cached chat markdown")):
+        with patch("src.paper_reader.arxiv_markdown.fetch_public_url", return_value=self.fake_fetched_response(b"# cached chat markdown", content_type="text/markdown")):
             with patch("src.paper_reader.chat_queue.answer_question_about_document", return_value="回答完成") as mocked_answer:
                 self.app.chat_queue._process_job(job)
 
@@ -3167,7 +3177,7 @@ class PaperReaderAppTests(unittest.TestCase):
         handler = self.app.action_queue._handlers["upload-import"]
 
         with patch.object(self.app.job_queue, "submit", return_value={"queued": 1, "existing": 0, "skipped": 0, "invalid": 0, "job_ids": [], "jobs": []}):
-            with patch("src.paper_reader.arxiv_markdown.urlopen", return_value=self.fake_markdown_response("# prefetched upload markdown")):
+            with patch("src.paper_reader.arxiv_markdown.fetch_public_url", return_value=self.fake_fetched_response(b"# prefetched upload markdown", content_type="text/markdown")):
                 result = handler(action, lambda progress, message, payload=None: None, lambda: False)
 
         self.assertEqual(result["summary"]["saved"], 1)
@@ -3201,7 +3211,7 @@ class PaperReaderAppTests(unittest.TestCase):
         handler = self.app.action_queue._handlers["source-import"]
 
         with patch.object(self.app.job_queue, "submit", return_value={"queued": 1, "existing": 0, "skipped": 0, "invalid": 0, "job_ids": [], "jobs": []}):
-            with patch("src.paper_reader.arxiv_markdown.urlopen", return_value=self.fake_markdown_response("# prefetched source markdown")):
+            with patch("src.paper_reader.arxiv_markdown.fetch_public_url", return_value=self.fake_fetched_response(b"# prefetched source markdown", content_type="text/markdown")):
                 result = handler(action, lambda progress, message, payload=None: None, lambda: False)
 
         self.assertEqual(result["summary"]["saved"], 1)
@@ -3222,7 +3232,7 @@ class PaperReaderAppTests(unittest.TestCase):
             source_value="2501.12948",
             source_url="https://arxiv.org/abs/2501.12948",
         )
-        with patch("src.paper_reader.arxiv_markdown.urlopen", return_value=self.fake_markdown_response("# cached status markdown")):
+        with patch("src.paper_reader.arxiv_markdown.fetch_public_url", return_value=self.fake_fetched_response(b"# cached status markdown", content_type="text/markdown")):
             self.app.library.ensure_arxiv_markdown_for_rel_path(rel_path)
 
         response = self.client.get("/", query_string={"paper": rel_path, "tab": "source"})

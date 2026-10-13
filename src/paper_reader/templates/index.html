@@ -123,13 +123,13 @@
                               href="{{ url_for('index', folder=current_folder, q=query, sort=sort_by, paper=paper.rel_path, tab=selected_tab if selected_paper and paper.rel_path == selected_paper.rel_path else 'source', show_done='1' if show_done else None) }}"
                             >
                               <div class="paper-row-top">
-                                <span class="paper-row-type">{{ paper.extension }}</span>
+                                <span class="paper-row-type">{{ format_resource_kind(paper.resource_kind) }}</span>
                                 {% if paper.extracted_date %}
                                   <span class="paper-row-date">{{ paper.extracted_date }}</span>
                                 {% endif %}
                               </div>
                               <strong class="paper-row-title">{{ paper.display_title }}</strong>
-                              <span class="paper-row-file">{{ paper.file_name }}</span>
+                              <span class="paper-row-file">{{ paper.source_domain or paper.file_name }}</span>
                               <div class="paper-row-bottom">
                                 <div class="paper-row-flags">
                                   {% if paper.folder %}<span class="paper-row-folder">{{ paper.folder }}</span>{% endif %}
@@ -164,9 +164,14 @@
       <div class="viewer-toolbar-main">
         <div class="viewer-toolbar-copy">
           {% if selected_paper %}
-            <p class="eyebrow">{{ '原文阅读' if selected_tab == 'source' else '核心解读' }}</p>
+            <p class="eyebrow">{{ format_resource_kind(selected_paper.resource_kind) }} · {{ '原文阅读' if selected_tab == 'source' else '核心解读' }}</p>
             <h2>{{ selected_paper.display_title }}</h2>
-            <p class="viewer-subtitle">{{ selected_paper.file_name }} · {{ format_bytes(selected_paper.file_size) }}</p>
+            <p class="viewer-subtitle">
+              {{ selected_paper.source_domain or selected_paper.file_name }} · {{ format_bytes(selected_paper.file_size) }}
+              {% if selected_paper.source_url %}
+                · <a href="{{ selected_paper.source_url }}" target="_blank" rel="noreferrer">Open original</a>
+              {% endif %}
+            </p>
           {% else %}
             <p class="eyebrow">原文阅读</p>
             <h2>原文与标签</h2>
@@ -430,7 +435,36 @@
 
       <div class="reader-stage" data-center-stage>
         {% if selected_tab == 'source' %}
-          {% if selected_paper.preview_kind == 'pdf' %}
+          {% if selected_paper.preview_kind in ['web', 'markdown'] %}
+            <div class="source-viewer source-text-viewer" data-reader-fullscreen="source-viewer">
+              <div class="source-viewer-head">
+                <div>
+                  <strong>{{ format_resource_kind(selected_paper.resource_kind) }}</strong>
+                  <span>
+                    {{ selected_paper.source_domain or 'Markdown snapshot' }}
+                    {% if selected_paper.fetch_status != 'ok' %} · FETCH-{{ selected_paper.fetch_status|upper }}{% endif %}
+                  </span>
+                </div>
+                <div class="prompt-viewer-actions prompt-viewer-actions-compact">
+                  <button type="button" class="button-link secondary reader-fullscreen-button" data-fullscreen-target="source-viewer">全屏阅读</button>
+                  {% if selected_paper.source_url %}
+                    <a class="button-link secondary reader-mini-link" href="{{ selected_paper.source_url }}" target="_blank" rel="noreferrer">Open original</a>
+                  {% endif %}
+                  {% if selected_paper.fetch_status != 'ok' %}
+                    <form action="{{ url_for('resource_retry_route') }}" method="post" class="inline-form">
+                      <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
+                      <button type="submit" class="secondary reader-mini-link">Retry fetch</button>
+                    </form>
+                  {% endif %}
+                </div>
+              </div>
+              {% if selected_web_html %}
+                <article class="markdown-viewer markdown-render source-viewer-body">{{ selected_web_html }}</article>
+              {% else %}
+                <div class="viewer-empty"><p>Snapshot content is unavailable.</p></div>
+              {% endif %}
+            </div>
+          {% elif selected_paper.preview_kind == 'pdf' %}
             <div class="source-viewer" data-reader-fullscreen="source-viewer">
               <div class="source-viewer-head">
                 <div>
@@ -647,6 +681,12 @@
                     <p><a href="{{ source.source_url }}" target="_blank" rel="noreferrer">{{ source.source_value }}</a></p>
                   {% else %}
                     <p>{{ source.source_value }}</p>
+                  {% endif %}
+                  {% if source.source_context %}
+                    <p>{{ source.source_context }}</p>
+                  {% endif %}
+                  {% if source.message_time_iso %}
+                    <small>{{ source.message_time_iso }}</small>
                   {% endif %}
                 </article>
               {% else %}
@@ -1103,16 +1143,16 @@
         <input type="hidden" name="sort" value="{{ sort_by }}">
         <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
         <label>
-          <span>论文链接或 arXiv ID 列表</span>
-          <textarea name="import_target" rows="3" placeholder='例如：2501.12948, 2501.12949 或 ["2501.12948", "https://arxiv.org/abs/2501.12949"]'></textarea>
+          <span>研究链接或 arXiv ID 列表</span>
+          <textarea name="import_target" rows="3" placeholder='论文、OpenReview、项目网站、技术博客、新闻；支持单条、空格/换行分隔或 JSON 数组'></textarea>
         </label>
         <label>
           <span>推荐理由（可选）</span>
           <input type="text" name="recommendation_reason" placeholder="例如：适合本周组会讨论">
         </label>
-        <div class="tool-hint">现在支持单条或批量导入：可直接填 arXiv ID / arXiv 链接 / OpenReview PDF 链接 / 直接 PDF 链接；批量时支持 JSON 数组，或用逗号、空格、换行分隔多个 arXiv ID / 链接。</div>
+        <div class="tool-hint">支持 arXiv abs/html/pdf、OpenReview landing page、直接 PDF、项目站、技术博客和新闻链接。网页会保存为 Markdown 快照；失败条目也会保留并可重试。</div>
         <div class="tool-actions">
-          <button type="submit">导入远程论文</button>
+          <button type="submit">导入研究资源</button>
         </div>
       </form>
 
