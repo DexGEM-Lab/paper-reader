@@ -415,6 +415,7 @@ class PaperLibrary:
         team_store: Any | None = None,
         *,
         page_fetch_max_bytes: int = 25 * 1024 * 1024,
+        fetch_max_redirects: int = 10,
     ):
         self.root = root.resolve()
         self.root.mkdir(parents=True, exist_ok=True)
@@ -425,7 +426,11 @@ class PaperLibrary:
         self.summary_root.mkdir(parents=True, exist_ok=True)
         self.arxiv_markdown_root = self.root / ARXIV_MARKDOWN_DIR_NAME
         self.arxiv_markdown_root.mkdir(parents=True, exist_ok=True)
-        self.web_resources = WebResourceStore(self.root, fetch_max_bytes=page_fetch_max_bytes)
+        self.web_resources = WebResourceStore(
+            self.root,
+            fetch_max_bytes=page_fetch_max_bytes,
+            max_redirects=fetch_max_redirects,
+        )
         self.prompt_store = prompt_store
         self.team_store = team_store
         self._hash_cache: dict[str, tuple[float, int, str]] = {}
@@ -2141,6 +2146,7 @@ def create_app(
         app.prompt_store,
         app.team_store,
         page_fetch_max_bytes=runtime_config.fetch_page_max_bytes,
+        fetch_max_redirects=runtime_config.fetch_max_redirects,
     )
     app.login_guard = LoginGuard()  # type: ignore[attr-defined]
     app.history_store = HistoricalInsightsStore(app.config["LIBRARY_ROOT"])  # type: ignore[attr-defined]
@@ -2718,6 +2724,7 @@ def create_app(
                     accept="application/pdf,*/*;q=0.1",
                     timeout=REMOTE_PDF_DOWNLOAD_TIMEOUT,
                     max_bytes=runtime_config.fetch_max_bytes,
+                    max_redirects=runtime_config.fetch_max_redirects,
                 )
                 if not response.body.startswith(b"%PDF-"):
                     raise RuntimeError("The remote response is not a PDF document.")

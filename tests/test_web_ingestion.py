@@ -13,6 +13,7 @@ from src.paper_reader.config import load_config
 from src.paper_reader.app import create_app
 from src.paper_reader.markdown_render import render_markdown
 from src.paper_reader.netutils import (
+    DEFAULT_MAX_REDIRECTS,
     FetchedResponse,
     ResponseTooLargeError,
     UnsafeURLError,
@@ -83,10 +84,12 @@ class NetutilsTests(unittest.TestCase):
                 "PAPER_READER_ENV_FILE": "/tmp/paper-reader-config/missing.env",
                 "PAPER_READER_FETCH_MAX_BYTES": str(120 * 1024 * 1024),
                 "PAPER_READER_PAGE_FETCH_MAX_BYTES": str(20 * 1024 * 1024),
+                "PAPER_READER_FETCH_MAX_REDIRECTS": "12",
             },
         )
         self.assertEqual(config.fetch_max_bytes, 120 * 1024 * 1024)
         self.assertEqual(config.fetch_page_max_bytes, 20 * 1024 * 1024)
+        self.assertEqual(config.fetch_max_redirects, 12)
 
     def test_document_fetch_accepts_over_25mib_when_configured(self) -> None:
         class Response:
@@ -161,6 +164,18 @@ class NetutilsTests(unittest.TestCase):
 
         self.assertEqual(opener.request_url, encoded_url)
         self.assertEqual(response.final_url, encoded_url)
+
+    def test_six_redirects_are_accepted_by_default_bound(self) -> None:
+        self.assertEqual(DEFAULT_MAX_REDIRECTS, 10)
+        handler = _SafeRedirectHandler(
+            resolver=lambda *args, **kwargs: PUBLIC_DNS,
+            max_redirects=DEFAULT_MAX_REDIRECTS,
+        )
+        request = Request("https://example.com/start")
+        for hop in range(7):
+            request = handler.redirect_request(request, None, 302, "Found", {}, f"/hop-{hop}")
+            assert request is not None
+        self.assertEqual(getattr(request, "_paper_reader_redirect_count"), 7)
 
 
 class WebClassificationTests(unittest.TestCase):

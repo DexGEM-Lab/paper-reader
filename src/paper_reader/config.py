@@ -129,6 +129,7 @@ class PaperReaderConfig:
     max_upload_bytes: int
     fetch_max_bytes: int
     fetch_page_max_bytes: int
+    fetch_max_redirects: int
 
     @property
     def feishu_enabled(self) -> bool:
@@ -230,5 +231,9 @@ def load_config(
         fetch_page_max_bytes=_positive_int_setting(
             setting("PAPER_READER_PAGE_FETCH_MAX_BYTES", str(25 * 1024 * 1024)),
             name="PAPER_READER_PAGE_FETCH_MAX_BYTES",
+        ),
+        fetch_max_redirects=_positive_int_setting(
+            setting("PAPER_READER_FETCH_MAX_REDIRECTS", "10"),
+            name="PAPER_READER_FETCH_MAX_REDIRECTS",
         ),
     )

@@ -1016,6 +1016,7 @@ class PaperReaderAppTests(unittest.TestCase):
                 raise TimeoutError("The read operation timed out")
             self.assertEqual(kwargs["timeout"], paper_reader_app_module.REMOTE_PDF_DOWNLOAD_TIMEOUT)
             self.assertEqual(kwargs["max_bytes"], 100 * 1024 * 1024)
+            self.assertEqual(kwargs["max_redirects"], 10)
             return self.fake_fetched_response(remote_bytes, url=url, content_type="application/pdf")
 
         with patch.object(paper_reader_app_module, "fetch_public_url", side_effect=flaky_fetch):
