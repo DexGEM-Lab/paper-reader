@@ -33,8 +33,7 @@ _SAFE_BUILTIN_PROMPT_UPDATES: dict[str, tuple[str, ...]] = {
     DEFAULT_PROMPT_SLUG: (LEGACY_DEFAULT_USER_PROMPT,),
 }
 DEFAULT_TAG_PROMPT = (
-    "请直接阅读本地论文文件 `{document_path}`。\n\n"
-    "请根据论文内容生成 3 到 8 个适合团队检索的英文标签。\n"
+    "请根据下面提供的论文正文生成 3 到 8 个适合团队检索的英文标签。\n"
     "要求：\n"
     "- 标签尽量短，小写英文\n"
     "- 优先提取方法、任务、模态、应用领域、机构或模型名\n"

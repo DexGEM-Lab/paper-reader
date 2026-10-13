@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import json
-import os
 import queue
-import signal
 import threading
 import uuid
 from dataclasses import asdict, dataclass
@@ -55,7 +53,6 @@ class PaperJobQueue:
         self._active_executions = 0
         self._queue: queue.Queue[str] = queue.Queue()
         self._jobs: dict[str, JobRecord] = {}
-        self._processes: dict[str, Any] = {}
         self._cancelled_jobs: set[str] = set()
         self._load_state()
         self._workers: list[threading.Thread] = []
@@ -289,18 +286,10 @@ class PaperJobQueue:
                     raise InterruptedError("Job interrupted.")
                 self._update_job(job_id, status="running", progress=max(1, min(progress, 99)), message=message)
 
-            def process_callback(process: Any) -> None:
-                with self._lock:
-                    if process is None:
-                        self._processes.pop(job_id, None)
-                    else:
-                        self._processes[job_id] = process
-
             generate_kwargs: dict[str, Any] = {
                 "force": job.force,
                 "progress_callback": report,
                 "should_abort": lambda: self._is_cancelled(job_id),
-                "process_callback": process_callback,
             }
             if job.requested_by_user_id is not None:
                 generate_kwargs["triggered_by_user_id"] = job.requested_by_user_id
@@ -325,8 +314,6 @@ class PaperJobQueue:
             )
             return
         finally:
-            with self._lock:
-                self._processes.pop(job_id, None)
             self._release_execution_slot()
 
         info = self.library.prompt_result_info(job.rel_path, job.prompt_slug)
@@ -382,7 +369,6 @@ class PaperJobQueue:
         return self.max_concurrency
 
     def stop_all(self) -> dict[str, int]:
-        running_pids: list[int] = []
         summary = {"queued": 0, "running": 0}
         with self._lock:
             for job in self._jobs.values():
@@ -400,21 +386,10 @@ class PaperJobQueue:
                     summary["running"] += 1
                     job.message = "正在停止任务..."
                     job.updated_at = self._timestamp()
-                    process = self._processes.get(job.id)
-                    if process is not None and getattr(process, "pid", None):
-                        running_pids.append(int(process.pid))
             self._persist_locked()
 
         with self._slot_condition:
             self._slot_condition.notify_all()
-
-        for pid in running_pids:
-            try:
-                os.killpg(os.getpgid(pid), signal.SIGTERM)
-            except ProcessLookupError:
-                continue
-            except OSError:
-                continue
 
         return summary
 

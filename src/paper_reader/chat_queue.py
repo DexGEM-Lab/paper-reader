@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from .ai_summary import DEFAULT_MODEL
 from .chat_ai import answer_question_about_document
+from .config import load_config
 
 MAX_CHAT_WORKERS = 1
 
@@ -56,7 +56,7 @@ class PaperChatQueue:
         question: str,
         history: list[dict[str, str]],
         assistant_message_id: int,
-        model: str = DEFAULT_MODEL,
+        model: str | None = None,
     ) -> None:
         self._queue.put(
             ChatJob(
@@ -67,7 +67,7 @@ class PaperChatQueue:
                 question=question,
                 history=history,
                 assistant_message_id=assistant_message_id,
-                model=model or DEFAULT_MODEL,
+                model=model or load_config().llm_model,
             )
         )
 

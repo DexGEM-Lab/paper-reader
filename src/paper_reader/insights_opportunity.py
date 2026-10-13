@@ -1,15 +1,13 @@
 from __future__ import annotations
 
 import json
-import os
-import signal
 import threading
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from .ai_summary import DEFAULT_MODEL, run_text_prompt
+from .ai_summary import run_text_prompt
 from .insights_history import INSIGHTS_DIR_NAME, THEMES, extract_json_object
 from .insights_momentum import (
     BENCHMARK_SIGNAL_DEFINITIONS,
@@ -94,7 +92,6 @@ class OpportunityInsightsStore:
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
         self._stop_requested = False
-        self._active_process: Any = None
 
     def load_map(self) -> dict[str, Any] | None:
         payload = self._load_json(self.map_path)
@@ -130,7 +127,7 @@ class OpportunityInsightsStore:
         payload["can_start"] = payload["state"] in {"idle", "ready"} and not self._is_running()
         return payload
 
-    def start_or_resume(self, *, model: str = DEFAULT_MODEL) -> bool:
+    def start_or_resume(self, *, model: str | None = None) -> bool:
         with self._lock:
             if self._is_running():
                 return False
@@ -138,7 +135,6 @@ class OpportunityInsightsStore:
             existing = self._load_json(self.status_path)
             resumable = existing.get("state") in {"stopped", "failed"}
             self._stop_requested = False
-            self._active_process = None
             self._write_json(
                 self.status_path,
                 {
@@ -179,15 +175,6 @@ class OpportunityInsightsStore:
             status["updated_at"] = _timestamp()
             status["message"] = "正在停止 Opportunity Map 生成任务..."
             self._write_json(self.status_path, status)
-            process = self._active_process
-
-        if process is not None:
-            pid = getattr(process, "pid", None)
-            if pid:
-                try:
-                    os.killpg(os.getpgid(int(pid)), signal.SIGTERM)
-                except (ProcessLookupError, OSError):
-                    pass
         return True
 
     def _is_running(self) -> bool:
@@ -235,7 +222,6 @@ class OpportunityInsightsStore:
             self._write_json(self.status_path, status)
         finally:
             with self._lock:
-                self._active_process = None
                 self._thread = None
                 self._stop_requested = False
 
@@ -309,7 +295,6 @@ class OpportunityInsightsStore:
                     library_root=self.library_root,
                     model=model,
                     should_abort=self._should_abort,
-                    process_callback=self._process_callback,
                     progress_callback=self._section_progress_callback(index=index, total=len(OPPORTUNITY_SECTIONS), label=section.label),
                 )
             result_sections.append(section_payload)
@@ -393,10 +378,6 @@ class OpportunityInsightsStore:
 
         return callback
 
-    def _process_callback(self, process: Any) -> None:
-        with self._lock:
-            self._active_process = process
-
     def _should_abort(self) -> bool:
         with self._lock:
             return self._stop_requested
@@ -473,7 +454,6 @@ def build_opportunity_section_payload(
     library_root: Path,
     model: str,
     should_abort: Callable[[], bool] | None = None,
-    process_callback: Callable[[Any], None] | None = None,
     progress_callback: Callable[[int, str], None] | None = None,
 ) -> dict[str, Any]:
     llm_payload = synthesize_section(
@@ -485,7 +465,6 @@ def build_opportunity_section_payload(
         library_root=library_root,
         model=model,
         should_abort=should_abort,
-        process_callback=process_callback,
         progress_callback=progress_callback,
     )
     merged_items = merge_section_items(candidates, llm_payload.get("items", []))
@@ -512,7 +491,6 @@ def synthesize_section(
     library_root: Path,
     model: str,
     should_abort: Callable[[], bool] | None = None,
-    process_callback: Callable[[Any], None] | None = None,
     progress_callback: Callable[[int, str], None] | None = None,
 ) -> dict[str, Any]:
     if not candidates:
@@ -584,7 +562,6 @@ def synthesize_section(
             model=model,
             progress_callback=progress_callback,
             should_abort=should_abort,
-            process_callback=process_callback,
         )
         parsed = extract_json_object(raw)
         if isinstance(parsed, dict):

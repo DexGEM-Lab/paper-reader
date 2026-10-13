@@ -65,9 +65,26 @@ PAPER_READER_FEISHU_API_BASE_URL=https://open.feishu.cn
 
 回调地址固定为 `https://<你的域名>/auth/feishu/callback`，并须在飞书应用的安全设置中登记。当前应用仍保留本地用户名密码登录与注册；飞书应用的可访问范围由飞书侧配置控制。
 
-### LLM 配置占位
+### LLM（DexGEM LiteLLM 网关）
 
-配置模块保留 `PAPER_READER_LLM_BASE_URL`、`PAPER_READER_LLM_API_KEY` 与 `PAPER_READER_LLM_MODEL`，供后续 LLM transport 迁移使用。当前实现仍调用本机 `codex` CLI，尚不消费这些值。
+所有论文解读、标签生成、聊天和 Insights 调用都经由团队的 OpenAI 兼容 LiteLLM 网关；服务不依赖本机 CLI、登录态或子进程。生产环境需要配置专用 virtual key：
+
+```dotenv
+PAPER_READER_LLM_BASE_URL=https://litellm.dex-gem.ai/v1
+PAPER_READER_LLM_API_KEY=replace-with-paper-reader-virtual-key
+# 长上下文主模型：论文解读、聊天、Insights
+PAPER_READER_LLM_MODEL=glm-5.3
+# 低成本首轮模型：自动标签
+PAPER_READER_LLM_CHEAP_MODEL=deepseek-flash
+# 允许 SQLite 中保存的 Prompt 模型覆盖默认值的名单
+PAPER_READER_LLM_ALLOWED_MODELS=claude-sonnet-5-5,claude-sonnet-5,kimi-k3,glm-5.3,deepseek-flash
+# 单进程请求启动限速、单次 HTTP 超时和每篇文档传给模型的保守字符/Token 上限
+PAPER_READER_LLM_QPS=10
+PAPER_READER_LLM_TIMEOUT=120
+PAPER_READER_LLM_CONTEXT_TOKENS=12000
+```
+
+默认 base URL、模型、限速和超时如上。未知的 SQLite Prompt 模型会记录警告并回退到 `PAPER_READER_LLM_MODEL`。HTTP 聊天使用网关 SSE 增量响应，并为每次浏览器流式会话发送 `x-litellm-session-id`。文档请求先抽取 PDF/DOCX 文本；有 arXiv Markdown 缓存时优先使用缓存；超过上下文预算时保留开头和结尾，省略中间正文。
 
 ## 环境准备
 

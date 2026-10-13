@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import json
 import math
-import os
-import signal
 import threading
 from collections import Counter, defaultdict
 from dataclasses import dataclass
@@ -11,7 +9,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from .ai_summary import DEFAULT_MODEL, run_text_prompt
+from .ai_summary import run_text_prompt
 from .insights_history import (
     INSIGHTS_DIR_NAME,
     SIGNAL_DEFINITIONS,
@@ -92,7 +90,6 @@ class MomentumInsightsStore:
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
         self._stop_requested = False
-        self._active_process: Any = None
 
     def load_dashboard(self) -> dict[str, Any] | None:
         payload = self._load_json(self.dashboard_path)
@@ -128,7 +125,7 @@ class MomentumInsightsStore:
         payload["can_start"] = payload["state"] in {"idle", "ready"} and not self._is_running()
         return payload
 
-    def start_or_resume(self, *, model: str = DEFAULT_MODEL, windows: tuple[int, ...] = MOMENTUM_WINDOWS) -> bool:
+    def start_or_resume(self, *, model: str | None = None, windows: tuple[int, ...] = MOMENTUM_WINDOWS) -> bool:
         with self._lock:
             if self._is_running():
                 return False
@@ -136,7 +133,6 @@ class MomentumInsightsStore:
             existing = self._load_json(self.status_path)
             resumable = existing.get("state") in {"stopped", "failed"}
             self._stop_requested = False
-            self._active_process = None
             self._write_json(
                 self.status_path,
                 {
@@ -177,15 +173,6 @@ class MomentumInsightsStore:
             status["updated_at"] = _timestamp()
             status["message"] = "正在停止 Momentum Radar 生成任务..."
             self._write_json(self.status_path, status)
-            process = self._active_process
-
-        if process is not None:
-            pid = getattr(process, "pid", None)
-            if pid:
-                try:
-                    os.killpg(os.getpgid(int(pid)), signal.SIGTERM)
-                except (ProcessLookupError, OSError):
-                    pass
         return True
 
     def _is_running(self) -> bool:
@@ -233,7 +220,6 @@ class MomentumInsightsStore:
             self._write_json(self.status_path, status)
         finally:
             with self._lock:
-                self._active_process = None
                 self._thread = None
                 self._stop_requested = False
 
@@ -303,7 +289,6 @@ class MomentumInsightsStore:
                     anchor_date=anchor_date,
                     model=model,
                     should_abort=self._should_abort,
-                    process_callback=self._process_callback,
                     progress_callback=self._window_progress_callback(index=index, total=len(ordered_windows), days=days),
                 )
             result_windows.append(window_payload)
@@ -384,10 +369,6 @@ class MomentumInsightsStore:
             self._check_stop()
 
         return callback
-
-    def _process_callback(self, process: Any) -> None:
-        with self._lock:
-            self._active_process = process
 
     def _should_abort(self) -> bool:
         with self._lock:
@@ -478,7 +459,6 @@ def build_momentum_window_payload(
     anchor_date: date,
     model: str,
     should_abort: Callable[[], bool] | None = None,
-    process_callback: Callable[[Any], None] | None = None,
     progress_callback: Callable[[int, str], None] | None = None,
 ) -> dict[str, Any]:
     current_papers = papers_for_window(papers, anchor_date, days)
@@ -499,7 +479,6 @@ def build_momentum_window_payload(
         emerging_edges,
         model=model,
         should_abort=should_abort,
-        process_callback=process_callback,
         progress_callback=progress_callback,
     )
 
@@ -536,7 +515,6 @@ def synthesize_window_momentum(
     *,
     model: str,
     should_abort: Callable[[], bool] | None = None,
-    process_callback: Callable[[Any], None] | None = None,
     progress_callback: Callable[[int, str], None] | None = None,
 ) -> dict[str, Any]:
     if not current_papers:
@@ -623,7 +601,6 @@ def synthesize_window_momentum(
             model=model,
             progress_callback=progress_callback,
             should_abort=should_abort,
-            process_callback=process_callback,
         )
         parsed = extract_json_object(raw)
         if isinstance(parsed, dict):

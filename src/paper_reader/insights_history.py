@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import json
-import os
 import re
-import signal
 import threading
 from collections import Counter, defaultdict
 from dataclasses import dataclass
@@ -11,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from .ai_summary import DEFAULT_MODEL, run_text_prompt
+from .ai_summary import run_text_prompt
 
 INSIGHTS_DIR_NAME = ".paper-reader-insights"
 HISTORY_CACHE_FILE_NAME = "history_timeline.json"
@@ -100,7 +98,6 @@ class HistoricalInsightsStore:
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
         self._stop_requested = False
-        self._active_process: Any = None
 
     def load_history(self) -> dict[str, Any] | None:
         payload = self._load_json(self.history_cache_path)
@@ -136,7 +133,7 @@ class HistoricalInsightsStore:
         payload["can_start"] = payload["state"] in {"idle", "ready"} and not self._is_running()
         return payload
 
-    def start_or_resume(self, *, model: str = DEFAULT_MODEL, max_themes: int = MAX_THEME_COUNT) -> bool:
+    def start_or_resume(self, *, model: str | None = None, max_themes: int = MAX_THEME_COUNT) -> bool:
         with self._lock:
             if self._is_running():
                 return False
@@ -148,7 +145,6 @@ class HistoricalInsightsStore:
             total = int(existing.get("total_themes") or 0) if existing.get("state") in {"stopped", "failed"} else 0
             current_index = int(existing.get("current_theme_index") or completed) if existing.get("state") in {"stopped", "failed"} else 0
             self._stop_requested = False
-            self._active_process = None
             self._write_json(
                 self.status_path,
                 {
@@ -190,18 +186,9 @@ class HistoricalInsightsStore:
             status["updated_at"] = _timestamp()
             status["message"] = "正在停止历史脉络生成任务..."
             self._write_json(self.status_path, status)
-            process = self._active_process
-
-        if process is not None:
-            pid = getattr(process, "pid", None)
-            if pid:
-                try:
-                    os.killpg(os.getpgid(int(pid)), signal.SIGTERM)
-                except (ProcessLookupError, OSError):
-                    pass
         return True
 
-    def rebuild_sync(self, *, model: str = DEFAULT_MODEL, max_themes: int = MAX_THEME_COUNT) -> dict[str, Any]:
+    def rebuild_sync(self, *, model: str | None = None, max_themes: int = MAX_THEME_COUNT) -> dict[str, Any]:
         payload = build_history_payload(self.library_root, model=model, max_themes=max_themes)
         self._write_json(self.history_cache_path, payload)
         self._write_json(
@@ -270,7 +257,6 @@ class HistoricalInsightsStore:
             self._write_json(self.status_path, status)
         finally:
             with self._lock:
-                self._active_process = None
                 self._thread = None
                 self._stop_requested = False
 
@@ -329,7 +315,6 @@ class HistoricalInsightsStore:
                     library_root=self.library_root,
                     model=model,
                     should_abort=self._should_abort,
-                    process_callback=self._process_callback,
                     progress_callback=self._theme_progress_callback(index=index, total=total_themes, label=theme.label),
                 )
             result_themes.append(theme_payload)
@@ -409,10 +394,6 @@ class HistoricalInsightsStore:
 
         return callback
 
-    def _process_callback(self, process: Any) -> None:
-        with self._lock:
-            self._active_process = process
-
     def _should_abort(self) -> bool:
         with self._lock:
             return self._stop_requested
@@ -456,7 +437,7 @@ class HistoricalInsightsStore:
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def build_history_payload(library_root: Path, *, model: str = DEFAULT_MODEL, max_themes: int = MAX_THEME_COUNT) -> dict[str, Any]:
+def build_history_payload(library_root: Path, *, model: str | None = None, max_themes: int = MAX_THEME_COUNT) -> dict[str, Any]:
     papers = load_core_history_papers(library_root)
     theme_groups = select_theme_groups(papers, max_themes=max_themes)
     theme_payloads: list[dict[str, Any]] = []
@@ -588,7 +569,6 @@ def build_theme_payload(
     library_root: Path,
     model: str,
     should_abort: Callable[[], bool] | None = None,
-    process_callback: Callable[[Any], None] | None = None,
     progress_callback: Callable[[int, str], None] | None = None,
 ) -> dict[str, Any]:
     year_counts = Counter(paper.year for paper in papers if paper.year != "unknown")
@@ -600,7 +580,6 @@ def build_theme_payload(
         library_root=library_root,
         model=model,
         should_abort=should_abort,
-        process_callback=process_callback,
         progress_callback=progress_callback,
     )
     representative = [paper_to_dict(paper, paper_id=f"P{index:02d}") for index, paper in enumerate(selected, start=1)]
@@ -666,7 +645,6 @@ def synthesize_theme_history(
     library_root: Path,
     model: str,
     should_abort: Callable[[], bool] | None = None,
-    process_callback: Callable[[Any], None] | None = None,
     progress_callback: Callable[[int, str], None] | None = None,
 ) -> dict[str, Any]:
     context = build_theme_context(theme, papers, selected)
@@ -699,7 +677,6 @@ def synthesize_theme_history(
             model=model,
             progress_callback=progress_callback,
             should_abort=should_abort,
-            process_callback=process_callback,
         )
         parsed = extract_json_object(raw)
         if isinstance(parsed, dict):

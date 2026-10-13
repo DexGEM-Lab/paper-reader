@@ -38,11 +38,12 @@ from .arxiv_markdown import (
     normalize_arxiv_id,
     write_markdown_cache,
 )
-from .chat_ai import answer_question_about_document
+from .chat_ai import stream_answer_question_about_document
 from .chat_queue import PaperChatQueue
 from .config import PaperReaderConfig, load_config, load_env_file_values, normalize_public_base_url
 from .document_utils import ALLOWED_EXTENSIONS, extract_document_metadata
 from .insights_history import HistoricalInsightsStore, extract_digest
+from .llm import resolve_model
 from .insights_momentum import MomentumInsightsStore
 from .insights_opportunity import OpportunityInsightsStore
 from .markdown_render import render_markdown
@@ -1463,7 +1464,6 @@ class PaperLibrary:
         *,
         progress_callback: Callable[[int, str], None] | None = None,
         should_abort: Callable[[], bool] | None = None,
-        process_callback: Callable[[Any], None] | None = None,
         triggered_by_user_id: int | None = None,
     ) -> list[str]:
         if self.team_store is None:
@@ -1478,11 +1478,10 @@ class PaperLibrary:
         content = run_prompt_on_document(
             document_path,
             user_prompt=tag_prompt.user_prompt,
-            model=tag_prompt.model or DEFAULT_MODEL,
+            model=load_config().llm_cheap_model,
             source_markdown_path=(arxiv_markdown.markdown_path if arxiv_markdown is not None else None),
             progress_callback=progress_callback,
             should_abort=should_abort,
-            process_callback=process_callback,
         )
         tags = parse_tag_generation_output(content)
         if not tags:
@@ -1503,7 +1502,6 @@ class PaperLibrary:
         prompt_slug: str,
         progress_callback: Callable[[int, str], None] | None = None,
         should_abort: Callable[[], bool] | None = None,
-        process_callback: Callable[[Any], None] | None = None,
         triggered_by_user_id: int | None = None,
     ) -> None:
         if prompt_slug != DEFAULT_PROMPT_SLUG:
@@ -1522,7 +1520,6 @@ class PaperLibrary:
             rel_path,
             progress_callback=wrapped_progress,
             should_abort=should_abort,
-            process_callback=process_callback,
             triggered_by_user_id=triggered_by_user_id,
         )
 
@@ -1534,7 +1531,6 @@ class PaperLibrary:
         force: bool = False,
         progress_callback: Callable[[int, str], None] | None = None,
         should_abort: Callable[[], bool] | None = None,
-        process_callback: Callable[[Any], None] | None = None,
         triggered_by_user_id: int | None = None,
     ) -> tuple[Path, bool]:
         document_path = self.resolve_relative_path(rel_path)
@@ -1546,25 +1542,24 @@ class PaperLibrary:
             self._record_prompt_run(rel_path, prompt, existing, triggered_by_user_id=triggered_by_user_id)
             return existing, False
         arxiv_markdown = self.ensure_arxiv_markdown_for_rel_path(rel_path)
+        effective_prompt = replace(prompt, model=resolve_model(prompt.model or DEFAULT_MODEL))
 
         content = run_prompt_on_document(
             document_path,
-            user_prompt=prompt.user_prompt,
-            model=prompt.model or DEFAULT_MODEL,
+            user_prompt=effective_prompt.user_prompt,
+            model=effective_prompt.model,
             source_markdown_path=(arxiv_markdown.markdown_path if arxiv_markdown is not None else None),
             progress_callback=progress_callback,
             should_abort=should_abort,
-            process_callback=process_callback,
         )
-        result_path = self.write_prompt_result(rel_path, prompt, content)
-        self._record_prompt_run(rel_path, prompt, result_path, triggered_by_user_id=triggered_by_user_id)
+        result_path = self.write_prompt_result(rel_path, effective_prompt, content)
+        self._record_prompt_run(rel_path, effective_prompt, result_path, triggered_by_user_id=triggered_by_user_id)
         try:
             self._maybe_refresh_ai_tags(
                 rel_path,
                 prompt_slug=prompt.slug,
                 progress_callback=progress_callback,
                 should_abort=should_abort,
-                process_callback=process_callback,
                 triggered_by_user_id=triggered_by_user_id,
             )
         except Exception:
@@ -2021,6 +2016,10 @@ def create_app(
     app.config["LLM_BASE_URL"] = runtime_config.llm_base_url
     app.config["LLM_API_KEY"] = runtime_config.llm_api_key
     app.config["LLM_MODEL"] = runtime_config.llm_model
+    app.config["LLM_CHEAP_MODEL"] = runtime_config.llm_cheap_model
+    app.config["LLM_ALLOWED_MODELS"] = runtime_config.llm_allowed_models
+    app.config["LLM_QPS"] = runtime_config.llm_qps
+    app.config["LLM_TIMEOUT"] = runtime_config.llm_timeout
     app.config["SESSION_COOKIE_HTTPONLY"] = True
     app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
     app.settings_store = SettingsStore(app.config["LIBRARY_ROOT"])  # type: ignore[attr-defined]
@@ -4146,7 +4145,7 @@ def create_app(
                 user_id=actor.id if visibility == "private" else None,
                 role="assistant",
                 status="pending",
-                model=DEFAULT_MODEL,
+                model=runtime_config.llm_model,
             )
             app.chat_queue.submit(  # type: ignore[attr-defined]
                 rel_path=rel_path,
@@ -4156,7 +4155,7 @@ def create_app(
                 question=message_body.strip(),
                 history=history,
                 assistant_message_id=assistant_message_id,
-                model=DEFAULT_MODEL,
+                model=runtime_config.llm_model,
             )
             if wants_json:
                 return {
@@ -4202,7 +4201,7 @@ def create_app(
                 user_id=actor.id if visibility == "private" else None,
                 role="assistant",
                 status="pending",
-                model=DEFAULT_MODEL,
+                model=runtime_config.llm_model,
             )
         except (FileNotFoundError, ValueError) as exc:
             return {"error": str(exc)}, 400
@@ -4210,34 +4209,27 @@ def create_app(
         def event_line(event: str, **payload: Any) -> str:
             return json.dumps({"event": event, **payload}, ensure_ascii=False) + "\n"
 
-        def stream_chunks(text: str) -> list[str]:
-            chunks: list[str] = []
-            for line in text.splitlines(keepends=True):
-                if len(line) <= 96:
-                    chunks.append(line)
-                    continue
-                chunks.extend(line[index : index + 96] for index in range(0, len(line), 96))
-            return chunks or [text]
-
         @stream_with_context
         def generate() -> Any:
-            results: queue.Queue[tuple[str, str]] = queue.Queue(maxsize=1)
+            results: queue.Queue[tuple[str, str]] = queue.Queue()
 
             def run_answer() -> None:
                 try:
                     document_path = Path(app.library.resolve_relative_path(rel_path))  # type: ignore[attr-defined]
                     arxiv_markdown = app.library.ensure_arxiv_markdown_for_rel_path(rel_path)  # type: ignore[attr-defined]
                     prompt_contexts = load_chat_prompt_contexts(rel_path, app.prompt_store.list_prompts())  # type: ignore[attr-defined]
-                    answer = answer_question_about_document(
+                    for chunk in stream_answer_question_about_document(
                         document_path,
                         question=message_body.strip(),
                         visibility=visibility,
                         history=history,
                         prompt_contexts=prompt_contexts,
                         arxiv_markdown_path=(arxiv_markdown.markdown_path if arxiv_markdown is not None else None),
-                        model=DEFAULT_MODEL,
-                    )
-                    results.put(("answer", answer))
+                        model=runtime_config.llm_model,
+                        session_id=f"paper-reader-chat-{assistant_message_id}",
+                    ):
+                        results.put(("partial", chunk))
+                    results.put(("done", ""))
                 except Exception as exc:
                     results.put(("error", str(exc)))
 
@@ -4252,63 +4244,66 @@ def create_app(
             )
             yield event_line("status", assistant_message_id=assistant_message_id, text="Paper Bot 正在读取论文和历史对话。")
 
+            partial = ""
             while True:
                 try:
                     kind, value = results.get(timeout=2.0)
-                    break
                 except queue.Empty:
                     yield event_line("status", assistant_message_id=assistant_message_id, text="Paper Bot 正在生成回复。")
-
-            if kind == "error":
-                if "429" in value or "Too Many Requests" in value:
-                    body = "Paper Bot 现在有点忙，刚刚碰到了速率限制。请等十几秒，再把这条问题发一次。"
-                else:
-                    body = f"这次回复没成功：{value}"
+                    continue
+                if kind == "partial":
+                    partial += value
+                    app.team_store.update_chat_message(  # type: ignore[attr-defined]
+                        assistant_message_id,
+                        body=partial,
+                        status="pending",
+                        model=runtime_config.llm_model,
+                    )
+                    yield event_line(
+                        "partial",
+                        assistant_message_id=assistant_message_id,
+                        body=partial,
+                        body_html=render_markdown(partial),
+                    )
+                    continue
+                if kind == "error":
+                    if "429" in value or "Too Many Requests" in value:
+                        body = "Paper Bot 现在有点忙，刚刚碰到了速率限制。请等十几秒，再把这条问题发一次。"
+                    else:
+                        body = f"这次回复没成功：{value}"
+                    app.team_store.update_chat_message(  # type: ignore[attr-defined]
+                        assistant_message_id,
+                        body=body,
+                        status="failed",
+                        model=runtime_config.llm_model,
+                    )
+                    yield event_line(
+                        "error",
+                        assistant_message_id=assistant_message_id,
+                        message=body,
+                        body_html=render_markdown(body),
+                        context=serialize_chat_context(app.team_store.chat_context(rel_path, actor.id)),  # type: ignore[attr-defined]
+                    )
+                    return
+                if not partial:
+                    body = "这次回复没有生成内容，请稍后重试。"
+                    app.team_store.update_chat_message(  # type: ignore[attr-defined]
+                        assistant_message_id, body=body, status="failed", model=runtime_config.llm_model
+                    )
+                    yield event_line("error", assistant_message_id=assistant_message_id, message=body, body_html=render_markdown(body))
+                    return
                 app.team_store.update_chat_message(  # type: ignore[attr-defined]
                     assistant_message_id,
-                    body=body,
-                    status="failed",
-                    model=DEFAULT_MODEL,
+                    body=partial,
+                    status="completed",
+                    model=runtime_config.llm_model,
                 )
                 yield event_line(
-                    "error",
+                    "done",
                     assistant_message_id=assistant_message_id,
-                    message=body,
-                    body_html=render_markdown(body),
                     context=serialize_chat_context(app.team_store.chat_context(rel_path, actor.id)),  # type: ignore[attr-defined]
                 )
                 return
-
-            partial = ""
-            chunks = stream_chunks(value)
-            for index, chunk in enumerate(chunks, start=1):
-                partial += chunk
-                app.team_store.update_chat_message(  # type: ignore[attr-defined]
-                    assistant_message_id,
-                    body=partial,
-                    status="pending",
-                    model=DEFAULT_MODEL,
-                )
-                yield event_line(
-                    "partial",
-                    assistant_message_id=assistant_message_id,
-                    body=partial,
-                    body_html=render_markdown(partial),
-                )
-                if index < len(chunks):
-                    time.sleep(0.02)
-
-            app.team_store.update_chat_message(  # type: ignore[attr-defined]
-                assistant_message_id,
-                body=value,
-                status="completed",
-                model=DEFAULT_MODEL,
-            )
-            yield event_line(
-                "done",
-                assistant_message_id=assistant_message_id,
-                context=serialize_chat_context(app.team_store.chat_context(rel_path, actor.id)),  # type: ignore[attr-defined]
-            )
 
         return Response(generate(), mimetype="application/x-ndjson")
 

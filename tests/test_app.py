@@ -4,7 +4,6 @@ import importlib
 import io
 import json
 import os
-import subprocess
 import tempfile
 import threading
 import time
@@ -1425,7 +1424,11 @@ class PaperReaderAppTests(unittest.TestCase):
     def test_chat_send_stream_route_streams_markdown_partials(self) -> None:
         self.make_pdf(self.library / "paper.pdf", "Streaming Chat Paper")
 
-        with patch.object(paper_reader_app_module, "answer_question_about_document", return_value="**流式回答**\n\n公式 $x^2$。"):
+        with patch.object(
+            paper_reader_app_module,
+            "stream_answer_question_about_document",
+            return_value=iter(["**流式回答**\n\n", "公式 $x^2$。"]),
+        ):
             response = self.client.post(
                 "/chat/send-stream",
                 data={
@@ -3248,29 +3251,32 @@ class PaperReaderAppTests(unittest.TestCase):
         self.assertIn("不要用 ``` 代码块包裹数学公式", prompt)
         self.assertIn("必须写出关键公式", prompt)
 
-    def test_answer_question_about_document_uses_medium_reasoning_effort(self) -> None:
+    def test_answer_question_about_document_uses_litellm_client(self) -> None:
         pdf_path = self.library / "formula" / "reasoning.pdf"
         self.make_pdf(pdf_path, "Reasoning Paper")
 
-        def fake_run(cmd, **kwargs):
-            self.assertIn("-c", cmd)
-            config_value = cmd[cmd.index("-c") + 1]
-            self.assertEqual(config_value, "model_reasoning_effort='medium'")
-            output_path = Path(cmd[cmd.index("--output-last-message") + 1])
-            output_path.write_text("使用 $$E=mc^2$$ 作答", encoding="utf-8")
-            return subprocess.CompletedProcess(cmd, 0, "", "")
+        class FakeClient:
+            def complete(self, messages, *, model, session_id=None):
+                self.messages = messages
+                self.model = model
+                self.session_id = session_id
+                return "使用 $$E=mc^2$$ 作答"
 
-        with patch.object(chat_ai_module.shutil, "which", return_value="/usr/bin/codex"):
-            with patch.object(chat_ai_module.subprocess, "run", side_effect=fake_run):
-                answer = answer_question_about_document(
-                    pdf_path,
-                    question="给我关键公式。",
-                    visibility="private",
-                    history=[],
-                    prompt_contexts=[],
-                )
+        client = FakeClient()
+        with patch.object(chat_ai_module, "get_llm_client", return_value=client):
+            answer = answer_question_about_document(
+                pdf_path,
+                question="给我关键公式。",
+                visibility="private",
+                history=[],
+                prompt_contexts=[],
+                session_id="test-chat",
+            )
 
         self.assertEqual(answer, "使用 $$E=mc^2$$ 作答")
+        self.assertEqual(client.model, "glm-5.3")
+        self.assertEqual(client.session_id, "test-chat")
+        self.assertIn("论文正文", client.messages[0]["content"])
 
     def test_render_markdown_supports_rule_and_blockquote(self) -> None:
         rendered = render_markdown("# 标题\n\n> 引用内容\n\n---\n\n1. 第一项\n2. 第二项")
