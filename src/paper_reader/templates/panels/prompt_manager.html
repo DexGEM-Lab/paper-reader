@@ -11,6 +11,7 @@
     <strong>可选：在“核心解读”完成后，用一份独立 Prompt 自动刷新共享 AI 标签。</strong>
     <p>它和普通解读模板分开管理；开启后，重新运行 `核心解读` 或在论文详情里手动点“AI 刷新标签”都会使用这里的配置。</p>
     <form class="prompt-form" action="{{ url_for('tag_prompt_save_route') }}" method="post">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <fieldset {% if not can_manage_prompts %}disabled{% endif %}>
       <input type="hidden" name="folder" value="{{ current_folder }}">
       <input type="hidden" name="q" value="{{ query }}">
@@ -50,6 +51,7 @@
           </div>
         </summary>
         <form class="prompt-form" action="{{ url_for('prompt_save_route') }}" method="post">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <fieldset {% if not can_manage_prompts %}disabled{% endif %}>
           <input type="hidden" name="folder" value="{{ current_folder }}">
           <input type="hidden" name="q" value="{{ query }}">
@@ -88,6 +90,7 @@
           </fieldset>
         </form>
         <form action="{{ url_for('prompt_delete_route') }}" method="post" class="inline-danger-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="folder" value="{{ current_folder }}">
           <input type="hidden" name="q" value="{{ query }}">
           <input type="hidden" name="sort" value="{{ sort_by }}">
@@ -113,6 +116,7 @@
         </div>
       </div>
       <form class="prompt-form" action="{{ url_for('prompt_save_route') }}" method="post">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <fieldset {% if not can_manage_prompts %}disabled{% endif %}>
         <input type="hidden" name="folder" value="{{ current_folder }}">
         <input type="hidden" name="q" value="{{ query }}">

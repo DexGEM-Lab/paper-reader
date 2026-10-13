@@ -15,6 +15,7 @@
           </div>
         </div>
         <form class="prompt-form team-admin-create-form" action="{{ url_for('team_user_save_route') }}" method="post">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="folder" value="{{ current_folder }}">
           <input type="hidden" name="q" value="{{ query }}">
           <input type="hidden" name="sort" value="{{ sort_by }}">
@@ -86,6 +87,7 @@
                   </div>
                 </summary>
                 <form class="prompt-form team-user-form" action="{{ url_for('team_user_update_route') }}" method="post">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                   <input type="hidden" name="folder" value="{{ current_folder }}">
                   <input type="hidden" name="q" value="{{ query }}">
                   <input type="hidden" name="sort" value="{{ sort_by }}">

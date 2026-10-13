@@ -90,6 +90,9 @@ class PaperReaderAppTests(unittest.TestCase):
         self.source_root = Path(self.source_tempdir.name)
         self.app = create_app(self.library, source_archive_root=self.source_root)
         self.app.testing = True
+        # Legacy integration tests exercise route behavior unrelated to CSRF; focused
+        # tests below enable the production-default protection explicitly.
+        self.app.config["CSRF_PROTECTION_ENABLED"] = False
         self.client = self.app.test_client()
         admin_user = self.app.team_store.get_user_by_username("admin")
         assert admin_user is not None
@@ -178,23 +181,26 @@ class PaperReaderAppTests(unittest.TestCase):
 
         return FakeResponse()
 
-    def make_feishu_app(self):
+    def make_feishu_app(self, *, auth_mode: str | None = None, allowed_chat_id: str | None = None):
         env_file = self.library / ".env.feishu"
+        settings = [
+            "PAPER_READER_SECRET_KEY=test-feishu-secret",
+            "PAPER_READER_BASE_URL=https://reader.example.test",
+            "PAPER_READER_FEISHU_APP_ID=cli_test_paper_reader",
+            "PAPER_READER_FEISHU_APP_SECRET=test-feishu-app-secret",
+        ]
+        if auth_mode:
+            settings.append(f"PAPER_READER_AUTH_MODE={auth_mode}")
+        if allowed_chat_id:
+            settings.append(f"PAPER_READER_FEISHU_ALLOWED_CHAT_ID={allowed_chat_id}")
         env_file.write_text(
-            "\n".join(
-                [
-                    "PAPER_READER_SECRET_KEY=test-feishu-secret",
-                    "PAPER_READER_BASE_URL=https://reader.example.test",
-                    "PAPER_READER_FEISHU_APP_ID=cli_test_paper_reader",
-                    "PAPER_READER_FEISHU_APP_SECRET=test-feishu-app-secret",
-                ]
-            )
-            + "\n",
+            "\n".join(settings) + "\n",
             encoding="utf-8",
         )
         with patch.dict(os.environ, {"PAPER_READER_ENV_FILE": str(env_file)}, clear=False):
             app = create_app(self.library, source_archive_root=self.source_root)
         app.testing = True
+        app.config["CSRF_PROTECTION_ENABLED"] = False
         self.extra_apps.append(app)
         return app
 
@@ -611,6 +617,7 @@ class PaperReaderAppTests(unittest.TestCase):
         ):
             app = create_app(self.library)
         app.testing = True
+        app.config["CSRF_PROTECTION_ENABLED"] = False
         client = app.test_client()
 
         custom_login = client.post(
@@ -700,6 +707,177 @@ class PaperReaderAppTests(unittest.TestCase):
         with client.session_transaction() as session:
             self.assertTrue(session["authenticated"])
             self.assertEqual(session["username"], username)
+
+    def test_auth_mode_configuration_matrix(self) -> None:
+        common = {"PAPER_READER_SECRET_KEY": "config-test-secret"}
+        local = paper_reader_app_module.load_config(project_dir=self.library, cwd=self.library, environ=common)
+        feishu = paper_reader_app_module.load_config(
+            project_dir=self.library,
+            cwd=self.library,
+            environ={
+                **common,
+                "PAPER_READER_BASE_URL": "https://reader.example.test",
+                "PAPER_READER_FEISHU_APP_ID": "cli_test",
+                "PAPER_READER_FEISHU_APP_SECRET": "test-secret",
+            },
+        )
+        mixed = paper_reader_app_module.load_config(
+            project_dir=self.library,
+            cwd=self.library,
+            environ={
+                **common,
+                "PAPER_READER_BASE_URL": "https://reader.example.test",
+                "PAPER_READER_FEISHU_APP_ID": "cli_test",
+                "PAPER_READER_FEISHU_APP_SECRET": "test-secret",
+                "PAPER_READER_AUTH_MODE": "mixed",
+                "PAPER_READER_SESSION_COOKIE_SECURE": "false",
+            },
+        )
+        partial = paper_reader_app_module.load_config(
+            project_dir=self.library,
+            cwd=self.library,
+            environ={**common, "PAPER_READER_BASE_URL": "https://reader.example.test"},
+        )
+        self.assertEqual(local.auth_mode, "local")
+        self.assertEqual(feishu.auth_mode, "feishu")
+        self.assertEqual(mixed.auth_mode, "mixed")
+        self.assertFalse(mixed.session_cookie_secure)
+        with self.assertRaises(ValueError):
+            create_app(self.library / "partial-oauth", config=partial)
+        self.assertNotIn("使用飞书登录", self.client.get("/login").get_data(as_text=True))
+        mixed_app = self.make_feishu_app(auth_mode="mixed")
+        mixed_page = mixed_app.test_client().get("/login").get_data(as_text=True)
+        self.assertIn("使用飞书登录", mixed_page)
+        self.assertIn("账号密码登录", mixed_page)
+
+    def test_feishu_mode_hides_local_login_and_disables_registration(self) -> None:
+        app = self.make_feishu_app(auth_mode="feishu")
+        client = app.test_client()
+
+        page = client.get("/login")
+        body = page.get_data(as_text=True)
+        self.assertEqual(page.status_code, 200)
+        self.assertIn("使用飞书登录", body)
+        self.assertNotIn("账号密码登录", body)
+        self.assertEqual(client.get("/register").status_code, 404)
+        self.assertEqual(client.post("/register").status_code, 404)
+        self.assertEqual(client.post("/login", data={"username": "admin"}).status_code, 404)
+
+    def test_first_feishu_user_becomes_admin_in_feishu_mode(self) -> None:
+        isolated = tempfile.TemporaryDirectory()
+        self.addCleanup(isolated.cleanup)
+        root = Path(isolated.name)
+        config = paper_reader_app_module.load_config(
+            project_dir=root,
+            cwd=root,
+            environ={
+                "PAPER_READER_SECRET_KEY": "first-feishu-admin-secret",
+                "PAPER_READER_BASE_URL": "https://reader.example.test",
+                "PAPER_READER_FEISHU_APP_ID": "cli_test",
+                "PAPER_READER_FEISHU_APP_SECRET": "test-secret",
+                "PAPER_READER_AUTH_MODE": "feishu",
+            },
+        )
+        app = create_app(root / "library", source_archive_root=root / "sources", config=config)
+        app.testing = True
+        app.config["CSRF_PROTECTION_ENABLED"] = False
+        self.extra_apps.append(app)
+        client = app.test_client()
+        state = parse_qs(urlparse(client.get("/login/feishu").headers["Location"]).query)["state"][0]
+        with patch.object(paper_reader_app_module, "fetch_feishu_app_access_token", return_value="app-token"), patch.object(
+            paper_reader_app_module, "fetch_feishu_user_access_token", return_value="user-token"
+        ), patch.object(
+            paper_reader_app_module,
+            "fetch_feishu_user_profile",
+            return_value={"open_id": "ou_first", "name": "First DexGEM Admin"},
+        ):
+            response = client.get(f"/auth/feishu/callback?code=code-123&state={state}")
+        self.assertEqual(response.status_code, 302)
+        user = app.team_store.get_user_by_username(paper_reader_app_module.build_feishu_username("ou_first"))
+        self.assertIsNotNone(user)
+        assert user is not None
+        self.assertEqual(user.role, "admin")
+
+    def test_feishu_group_membership_allows_before_creating_user(self) -> None:
+        app = self.make_feishu_app(allowed_chat_id="oc_required")
+        client = app.test_client()
+        start = client.get("/login/feishu", follow_redirects=False)
+        state = parse_qs(urlparse(start.headers["Location"]).query)["state"][0]
+
+        responses = {
+            paper_reader_app_module.FEISHU_APP_ACCESS_TOKEN_URL: {"code": 0, "app_access_token": "app-token"},
+            paper_reader_app_module.FEISHU_USER_ACCESS_TOKEN_URL: {"code": 0, "data": {"access_token": "user-token"}},
+            paper_reader_app_module.FEISHU_USER_INFO_URL: {"code": 0, "data": {"open_id": "ou_allowed", "name": "Allowed"}},
+            "https://open.feishu.cn/open-apis/im/v1/chats/oc_required/members/is_in_chat": {"code": 0, "data": {"is_in_chat": True}},
+        }
+
+        def fake_open_json_request(url, **kwargs):
+            if url.endswith("/is_in_chat"):
+                self.assertEqual(kwargs["headers"]["Authorization"], "Bearer user-token")
+            return responses[url]
+
+        with patch.object(paper_reader_app_module, "open_json_request", side_effect=fake_open_json_request):
+            response = client.get(f"/auth/feishu/callback?code=code-123&state={state}", follow_redirects=False)
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIsNotNone(app.team_store.get_user_by_username(paper_reader_app_module.build_feishu_username("ou_allowed")))
+
+    def test_feishu_group_membership_denial_and_failure_create_no_user(self) -> None:
+        for membership_response in (
+            {"code": 0, "data": {"is_in_chat": False}},
+            {"code": 99991679, "msg": "permission denied"},
+        ):
+            app = self.make_feishu_app(allowed_chat_id="oc_required")
+            client = app.test_client()
+            start = client.get("/login/feishu", follow_redirects=False)
+            state = parse_qs(urlparse(start.headers["Location"]).query)["state"][0]
+
+            def fake_open_json_request(url, **kwargs):
+                responses = {
+                    paper_reader_app_module.FEISHU_APP_ACCESS_TOKEN_URL: {"code": 0, "app_access_token": "app-token"},
+                    paper_reader_app_module.FEISHU_USER_ACCESS_TOKEN_URL: {"code": 0, "data": {"access_token": "user-token"}},
+                    paper_reader_app_module.FEISHU_USER_INFO_URL: {"code": 0, "data": {"open_id": "ou_denied", "name": "Denied"}},
+                }
+                return membership_response if url.endswith("/is_in_chat") else responses[url]
+
+            with patch.object(paper_reader_app_module, "open_json_request", side_effect=fake_open_json_request):
+                response = client.get(f"/auth/feishu/callback?code=code-123&state={state}", follow_redirects=False)
+
+            self.assertEqual(response.status_code, 403)
+            self.assertIn("不在必需的 DexGEM 飞书群", response.get_data(as_text=True))
+            self.assertIsNone(app.team_store.get_user_by_username(paper_reader_app_module.build_feishu_username("ou_denied")))
+
+    def test_csrf_rejects_missing_token_and_accepts_session_token(self) -> None:
+        self.app.config["CSRF_PROTECTION_ENABLED"] = True
+        rejected = self.client.post("/folders", data={"new_folder": "Blocked"})
+        self.assertEqual(rejected.status_code, 403)
+        with self.client.session_transaction() as sess:
+            sess["csrf_token"] = "csrf-test-token"
+        accepted = self.client.post("/folders", data={"new_folder": "Allowed", "csrf_token": "csrf-test-token"})
+        self.assertEqual(accepted.status_code, 302)
+        self.assertTrue((self.library / "Allowed").exists())
+
+    def test_login_rotates_session_and_secure_cookie_follows_https_base_url(self) -> None:
+        app = self.make_feishu_app()
+        self.assertTrue(app.config["SESSION_COOKIE_SECURE"])
+        self.assertEqual(app.config["PERMANENT_SESSION_LIFETIME"].total_seconds(), 12 * 60 * 60)
+
+        self.app.config["CSRF_PROTECTION_ENABLED"] = True
+        client = self.app.test_client()
+        page = client.get("/login")
+        self.assertEqual(page.status_code, 200)
+        with client.session_transaction() as sess:
+            csrf = sess["csrf_token"]
+            sess["untrusted_pre_login_value"] = "discard-me"
+        response = client.post(
+            "/login",
+            data={"username": "admin", "password": "test-admin-password", "csrf_token": csrf},
+        )
+        self.assertEqual(response.status_code, 302)
+        with client.session_transaction() as sess:
+            self.assertNotIn("untrusted_pre_login_value", sess)
+            self.assertNotEqual(sess["csrf_token"], csrf)
+            self.assertTrue(sess.permanent)
 
     def test_register_creates_member_and_logs_in(self) -> None:
         client = self.app.test_client()

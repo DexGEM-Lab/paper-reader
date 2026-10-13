@@ -113,6 +113,11 @@ class PaperReaderConfig:
     feishu_app_id: str
     feishu_app_secret: str
     feishu_api_base_url: str
+    feishu_allowed_chat_id: str
+    auth_mode: str
+    auth_mode_is_default: bool
+    session_ttl_hours: int
+    session_cookie_secure: bool
     llm_base_url: str
     llm_api_key: str
     llm_model: str
@@ -126,6 +131,10 @@ class PaperReaderConfig:
     @property
     def feishu_enabled(self) -> bool:
         return bool(self.public_base_url or self.feishu_app_id or self.feishu_app_secret)
+
+    @property
+    def feishu_oauth_configured(self) -> bool:
+        return bool(self.public_base_url and self.feishu_app_id and self.feishu_app_secret)
 
 
 def load_config(
@@ -159,6 +168,19 @@ def load_config(
     if secret_key_is_ephemeral:
         secret_key = secrets.token_urlsafe(32)
 
+    public_base_url = normalize_public_base_url(setting("PAPER_READER_BASE_URL"))
+    feishu_app_id = setting("PAPER_READER_FEISHU_APP_ID")
+    feishu_app_secret = setting("PAPER_READER_FEISHU_APP_SECRET")
+    feishu_oauth_configured = bool(public_base_url and feishu_app_id and feishu_app_secret)
+    raw_auth_mode = setting("PAPER_READER_AUTH_MODE").casefold()
+    if raw_auth_mode and raw_auth_mode not in {"feishu", "local", "mixed"}:
+        raise ValueError("PAPER_READER_AUTH_MODE must be one of: feishu, local, mixed.")
+    auth_mode = raw_auth_mode or ("feishu" if feishu_oauth_configured else "local")
+    secure_cookie_default = "true" if urlparse(public_base_url).scheme == "https" else "false"
+    raw_secure_cookie = setting("PAPER_READER_SESSION_COOKIE_SECURE", secure_cookie_default).casefold()
+    if raw_secure_cookie not in {"true", "false"}:
+        raise ValueError("PAPER_READER_SESSION_COOKIE_SECURE must be true or false.")
+
     return PaperReaderConfig(
         data_dir=data_dir,
         library_dir=library_dir,
@@ -170,12 +192,19 @@ def load_config(
         login_username=login_username,
         login_password=login_password,
         admin_usernames=_csv_setting(setting("PAPER_READER_ADMIN_USERS")),
-        public_base_url=normalize_public_base_url(setting("PAPER_READER_BASE_URL")),
-        feishu_app_id=setting("PAPER_READER_FEISHU_APP_ID"),
-        feishu_app_secret=setting("PAPER_READER_FEISHU_APP_SECRET"),
+        public_base_url=public_base_url,
+        feishu_app_id=feishu_app_id,
+        feishu_app_secret=feishu_app_secret,
         feishu_api_base_url=normalize_public_base_url(
             setting("PAPER_READER_FEISHU_API_BASE_URL", DEFAULT_FEISHU_API_BASE_URL)
         ),
+        feishu_allowed_chat_id=setting("PAPER_READER_FEISHU_ALLOWED_CHAT_ID"),
+        auth_mode=auth_mode,
+        auth_mode_is_default=not bool(raw_auth_mode),
+        session_ttl_hours=_positive_int_setting(
+            setting("PAPER_READER_SESSION_TTL_HOURS", "12"), name="PAPER_READER_SESSION_TTL_HOURS"
+        ),
+        session_cookie_secure=raw_secure_cookie == "true",
         llm_base_url=normalize_public_base_url(setting("PAPER_READER_LLM_BASE_URL", DEFAULT_LLM_BASE_URL)),
         llm_api_key=setting("PAPER_READER_LLM_API_KEY"),
         llm_model=setting("PAPER_READER_LLM_MODEL", DEFAULT_LLM_MODEL),

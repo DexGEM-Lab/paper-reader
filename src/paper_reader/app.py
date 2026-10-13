@@ -6,6 +6,7 @@ import json
 import logging
 import queue
 import re
+import secrets
 import shutil
 import string
 import tempfile
@@ -13,11 +14,11 @@ import threading
 import time
 import uuid
 from urllib.error import HTTPError, URLError
-from urllib.parse import unquote, urlencode, urlparse
+from urllib.parse import quote, unquote, urlencode, urlparse
 from urllib.request import Request, urlopen
 import zipfile
 from dataclasses import asdict, dataclass, replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
@@ -74,6 +75,7 @@ FEISHU_AUTH_PAGE_URL = "https://open.feishu.cn/open-apis/authen/v1/index"
 FEISHU_APP_ACCESS_TOKEN_URL = "https://open.feishu.cn/open-apis/auth/v3/app_access_token/internal"
 FEISHU_USER_ACCESS_TOKEN_URL = "https://open.feishu.cn/open-apis/authen/v1/access_token"
 FEISHU_USER_INFO_URL = "https://open.feishu.cn/open-apis/authen/v1/user_info"
+FEISHU_CHAT_MEMBERSHIP_PATH = "/open-apis/im/v1/chats/{chat_id}/members/is_in_chat"
 FEISHU_USERNAME_PREFIX = "feishu-"
 LOGGER = logging.getLogger(__name__)
 
@@ -105,6 +107,9 @@ class FeishuOAuthConfig:
     @property
     def user_info_url(self) -> str:
         return f"{self.api_base_url}/open-apis/authen/v1/user_info"
+
+    def chat_membership_url(self, chat_id: str) -> str:
+        return f"{self.api_base_url}{FEISHU_CHAT_MEMBERSHIP_PATH.format(chat_id=quote(chat_id, safe=''))}"
 
 
 @dataclass
@@ -2025,6 +2030,19 @@ def fetch_feishu_user_profile(config: FeishuOAuthConfig, user_access_token: str)
     return data
 
 
+def is_feishu_chat_member(config: FeishuOAuthConfig, chat_id: str, user_access_token: str) -> bool:
+    """Check membership with the OAuth user's token; API errors must deny access."""
+    payload = open_json_request(
+        config.chat_membership_url(chat_id),
+        headers={"Authorization": f"Bearer {user_access_token}"},
+    )
+    if payload.get("code") not in {0, "0"}:
+        raise ValueError(f"飞书群成员校验失败: {feishu_response_message(payload)}")
+    data = payload.get("data")
+    if not isinstance(data, dict) or not isinstance(data.get("is_in_chat"), bool):
+        raise ValueError("飞书群成员校验返回缺少 is_in_chat。")
+    return data["is_in_chat"]
+
 
 def redirect_to_index(
     current_folder: str,
@@ -2060,7 +2078,17 @@ def create_app(
     source_root = (source_archive_root or runtime_config.source_archive_dir).resolve()
     root.mkdir(parents=True, exist_ok=True)
     source_root.mkdir(parents=True, exist_ok=True)
-    feishu_oauth = resolve_feishu_oauth_config(runtime_config)
+    # A partially supplied OAuth tuple is a deployment mistake, never a reason to
+    # silently fall back to local credentials.
+    if runtime_config.feishu_enabled and not runtime_config.feishu_oauth_configured:
+        resolve_feishu_oauth_config(runtime_config)
+    feishu_oauth = resolve_feishu_oauth_config(runtime_config) if runtime_config.auth_mode in {"feishu", "mixed"} else None
+    if runtime_config.auth_mode in {"feishu", "mixed"} and feishu_oauth is None:
+        raise ValueError(f"PAPER_READER_AUTH_MODE={runtime_config.auth_mode} requires configured Feishu OAuth.")
+    if runtime_config.auth_mode_is_default and runtime_config.auth_mode == "local":
+        LOGGER.warning("Feishu OAuth is not configured; defaulting PAPER_READER_AUTH_MODE to local for development.")
+    if runtime_config.auth_mode in {"feishu", "mixed"} and not runtime_config.feishu_allowed_chat_id:
+        LOGGER.warning("PAPER_READER_FEISHU_ALLOWED_CHAT_ID is unset; any Feishu-authenticated user may enter.")
     if runtime_config.secret_key_is_ephemeral:
         LOGGER.warning("PAPER_READER_SECRET_KEY is unset; using an ephemeral secret key. Sessions will reset on restart.")
     app = Flask(
@@ -2079,6 +2107,11 @@ def create_app(
     app.config["LOGIN_PASSWORD"] = runtime_config.login_password
     app.config["PUBLIC_BASE_URL"] = runtime_config.public_base_url
     app.config["FEISHU_OAUTH"] = feishu_oauth
+    app.config["AUTH_MODE"] = runtime_config.auth_mode
+    app.config["FEISHU_ALLOWED_CHAT_ID"] = runtime_config.feishu_allowed_chat_id
+    app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(hours=runtime_config.session_ttl_hours)
+    app.config["SESSION_COOKIE_SECURE"] = runtime_config.session_cookie_secure
+    app.config["CSRF_PROTECTION_ENABLED"] = True
     app.config["LLM_BASE_URL"] = runtime_config.llm_base_url
     app.config["LLM_API_KEY"] = runtime_config.llm_api_key
     app.config["LLM_MODEL"] = runtime_config.llm_model
@@ -2093,7 +2126,7 @@ def create_app(
     app.team_store = TeamStore(  # type: ignore[attr-defined]
         app.config["LIBRARY_ROOT"], admin_usernames=runtime_config.admin_usernames
     )
-    if runtime_config.login_username and runtime_config.login_password:
+    if runtime_config.auth_mode != "feishu" and runtime_config.login_username and runtime_config.login_password:
         app.team_store.bootstrap_default_user(runtime_config.login_username, runtime_config.login_password)  # type: ignore[attr-defined]
     app.prompt_store = PromptStore(app.config["LIBRARY_ROOT"], app.team_store.db_path)  # type: ignore[attr-defined]
     app.library = PaperLibrary(app.config["LIBRARY_ROOT"], app.prompt_store, app.team_store)  # type: ignore[attr-defined]
@@ -2111,6 +2144,18 @@ def create_app(
     def clear_user_session() -> None:
         for key in ("authenticated", "user_id", "username", "display_name", "role"):
             session.pop(key, None)
+
+    def csrf_token() -> str:
+        token = session.get("csrf_token")
+        if not isinstance(token, str) or not token:
+            token = secrets.token_urlsafe(32)
+            session["csrf_token"] = token
+        return token
+
+    def csrf_request_is_valid() -> bool:
+        expected = session.get("csrf_token")
+        supplied = request.form.get("csrf_token") or request.headers.get("X-CSRFToken")
+        return isinstance(expected, str) and isinstance(supplied, str) and secrets.compare_digest(expected, supplied)
 
     def feishu_oauth_config() -> FeishuOAuthConfig | None:
         config = app.config.get("FEISHU_OAUTH")
@@ -2187,6 +2232,11 @@ def create_app(
         return raw_target.strip().strip("/")
 
     def start_user_session(user: TeamUser) -> None:
+        # Flask's signed-cookie session has no server-side identifier. Clearing it before
+        # establishing identity discards any attacker-controlled pre-login state.
+        session.clear()
+        session.permanent = True
+        session["csrf_token"] = secrets.token_urlsafe(32)
         session["authenticated"] = True
         session["user_id"] = user.id
         session["username"] = user.username
@@ -2254,6 +2304,7 @@ def create_app(
             "member_submission_folder": default_member_submission_folder(user),
             "avatar_initials": avatar_initials,
             "avatar_url_for": avatar_url_for,
+            "csrf_token": csrf_token,
         }
 
     def user_done_rel_paths(user_id: int | None = None) -> set[str]:
@@ -2269,12 +2320,23 @@ def create_app(
     def require_login() -> Any:
         endpoint = request.endpoint or ""
         allowed = {"login", "register", "logout", "health", "feishu_login", "feishu_callback"}
+        if endpoint == "register" and app.config["AUTH_MODE"] == "feishu":
+            abort(404)
         if endpoint in allowed or endpoint.startswith("static"):
             return None
         if session.get("authenticated") and current_user() is not None:
             return None
         next_url = request.full_path if request.query_string else request.path
         return redirect(url_for("login", next=next_url.rstrip("?")))
+
+    @app.before_request
+    def protect_mutating_requests() -> Any:
+        if request.method not in {"POST", "PUT", "DELETE"} or request.endpoint == "feishu_callback":
+            return None
+        if request.endpoint == "login" and app.config["AUTH_MODE"] == "feishu":
+            abort(404)
+        if app.config["CSRF_PROTECTION_ENABLED"] and not csrf_request_is_valid():
+            abort(403, "CSRF token is missing or invalid.")
 
     @app.get("/health")
     def health() -> Any:
@@ -2349,8 +2411,11 @@ def create_app(
         client_key = app.login_guard.key_for_request(request)  # type: ignore[attr-defined]
         status = app.login_guard.status_for(client_key)  # type: ignore[attr-defined]
         feishu_config = feishu_oauth_config()
+        local_login_enabled = app.config["AUTH_MODE"] in {"local", "mixed"}
 
         if request.method == "POST":
+            if not local_login_enabled:
+                abort(404)
             if status["locked"]:
                 flash(f"密码连续输错过多，请等待 {status['remaining_seconds']} 秒后再试。", "error")
             else:
@@ -2377,6 +2442,8 @@ def create_app(
             remaining_seconds=status["remaining_seconds"],
             feishu_enabled=feishu_config is not None,
             feishu_callback_url=feishu_config.callback_url if feishu_config is not None else "",
+            local_login_enabled=local_login_enabled,
+            local_registration_enabled=app.config["AUTH_MODE"] != "feishu",
             show_manual_login=request.method == "POST" or status["locked"] or feishu_config is None,
         )
 
@@ -2384,8 +2451,7 @@ def create_app(
     def feishu_login() -> Any:
         config = feishu_oauth_config()
         if config is None:
-            flash("飞书登录还没有配置。", "error")
-            return redirect(url_for("login"))
+            abort(404)
 
         next_url = normalize_next_url(request.args.get("next"))
         state = uuid.uuid4().hex
@@ -2395,6 +2461,7 @@ def create_app(
             "app_id": config.app_id,
             "redirect_uri": config.callback_url,
             "state": state,
+            "scope": "im:chat:readonly",
         }
         return redirect(f"{config.auth_page_url}?{urlencode(params)}")
 
@@ -2426,6 +2493,14 @@ def create_app(
             app_access_token = fetch_feishu_app_access_token(config)
             user_access_token = fetch_feishu_user_access_token(config, app_access_token, code)
             profile = fetch_feishu_user_profile(config, user_access_token)
+            allowed_chat_id = str(app.config["FEISHU_ALLOWED_CHAT_ID"] or "").strip()
+            if allowed_chat_id:
+                try:
+                    if not is_feishu_chat_member(config, allowed_chat_id, user_access_token):
+                        return render_template("feishu_access_denied.html"), 403
+                except ValueError as exc:
+                    LOGGER.error("Feishu group membership verification failed closed: %s", exc)
+                    return render_template("feishu_access_denied.html"), 403
             user = sync_feishu_user(profile)
         except (PermissionError, ValueError) as exc:
             flash(str(exc), "error")
@@ -2436,6 +2511,8 @@ def create_app(
 
     @app.route("/register", methods=["GET", "POST"])
     def register() -> Any:
+        if app.config["AUTH_MODE"] == "feishu":
+            abort(404)
         next_url = normalize_next_url(request.values.get("next"))
         if request.method == "POST":
             username = request.form.get("username", "").strip()

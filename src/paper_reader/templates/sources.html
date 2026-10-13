@@ -75,6 +75,7 @@
                       </div>
 
                       <form class="source-day-actions" action="{{ url_for('source_download_zip_route') }}" method="post">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <input type="hidden" name="run_date" value="{{ day.run_date }}">
                         <div class="tool-actions split-actions">
                           <button type="submit">打包下载选中论文</button>

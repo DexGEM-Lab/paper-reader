@@ -1,0 +1,16 @@
+{% extends 'base.html' %}
+{% block title %}访问受限{% endblock %}
+{% block content %}
+<section class="auth-shell">
+  <div class="auth-card card">
+    <div class="auth-copy">
+      <p class="eyebrow">Access denied</p>
+      <h2>无法访问论文阅读器</h2>
+      <p class="hero-copy">你不在必需的 DexGEM 飞书群中；请联系管理员。</p>
+    </div>
+    <div class="tool-actions">
+      <a class="button-link secondary" href="{{ url_for('login') }}">返回登录</a>
+    </div>
+  </div>
+</section>
+{% endblock %}

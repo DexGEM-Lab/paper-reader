@@ -32,39 +32,49 @@
 
 `PAPER_READER_LIBRARY_DIR` 和 `PAPER_READER_SOURCES_ARCHIVE_DIR` 覆盖各自目录；未设置时从 `PAPER_READER_DATA_DIR` 派生。主论文库、SQLite 协作数据、Prompt 结果和 Sources 归档都在这些目录中，不随 Git 提交。
 
-### 身份与管理员初始化
+### 身份、会话与管理员初始化
 
-没有内置用户名、密码或 Flask session secret。生产环境必须设置稳定的 `PAPER_READER_SECRET_KEY`。未设置时应用为当前进程生成随机 session secret 并记录警告；重启后所有 session 会失效。
+生产部署使用飞书作为唯一入口。设置稳定的 `PAPER_READER_SECRET_KEY`；未设置时应用会生成进程内随机值并记录警告，重启会使所有会话失效。会话默认有效 **12 小时**，登录时清空登录前 session 状态，cookie 为 `HttpOnly; SameSite=Lax`；当 `PAPER_READER_BASE_URL` 是 HTTPS 时，cookie 默认也带 `Secure`。
 
-可选的本地管理员登录必须同时设置以下两项：
+```dotenv
+# feishu（生产）、local（本地开发）或 mixed（迁移期）；未设置时，完整 Feishu OAuth 配置会默认 feishu，否则默认 local 并记录警告。
+PAPER_READER_AUTH_MODE=feishu
+PAPER_READER_SESSION_TTL_HOURS=12
+# 可选覆盖；HTTPS public base URL 时默认为 true
+PAPER_READER_SESSION_COOKIE_SECURE=true
+```
+
+- `feishu`：登录页只显示飞书；本地密码登录被拒绝，`/register` 返回 404。
+- `local`：只显示本地用户名/密码与注册入口，适合开发。
+- `mixed`：两种登录方式都可用，仅用于明确的迁移期。
+
+在没有本地 bootstrap 账号的空数据库中，第一个成功注册或首次成功飞书登录的用户会成为管理员。`PAPER_READER_ADMIN_USERS` 仍可列出明确的本地用户名（飞书用户使用其生成的 `feishu-<sha256 前 20 位>` 用户名）以授予管理员角色。**首次 DexGEM 管理员**：以空数据库、`feishu` 模式启动，不设置 `PAPER_READER_LOGIN_USERNAME` / `PAPER_READER_LOGIN_PASSWORD`；让一位 DexGEM 群成员先完成飞书登录。群校验通过后，该首位用户自动成为管理员。之后由该管理员在团队设置中管理成员和角色。
+
+本地账号只在 `local` 或 `mixed` 模式使用，且必须同时配置：
 
 ```dotenv
 PAPER_READER_LOGIN_USERNAME=admin
 PAPER_READER_LOGIN_PASSWORD=replace-with-a-unique-password
 ```
 
-若未配置这对凭据，应用不在启动时创建本地账号；第一个成功注册或首次飞书登录的用户会成为管理员。也可显式指定管理员用户名列表：
-
-```dotenv
-PAPER_READER_ADMIN_USERS=admin,operations-admin
-```
-
-该列表仅是部署配置，取代了源代码中的命名管理员。连续输错本地密码 3 次会锁定 5 分钟。
-
-### 飞书 OAuth
-
-启用飞书登录需要：
+### 飞书 OAuth 与 DexGEM 群门禁
 
 ```dotenv
 PAPER_READER_SECRET_KEY=replace-with-a-random-secret
-PAPER_READER_BASE_URL=https://reader.example.com
+PAPER_READER_BASE_URL=https://reader.dex-gem.ai
 PAPER_READER_FEISHU_APP_ID=cli_xxx
 PAPER_READER_FEISHU_APP_SECRET=xxx
+# DexGEM group; omit only when any Feishu-authenticated user is intentionally allowed.
+PAPER_READER_FEISHU_ALLOWED_CHAT_ID=oc_6322c3860efe1fac4f759c1fded71ddb
 # 可选；默认 https://open.feishu.cn
 PAPER_READER_FEISHU_API_BASE_URL=https://open.feishu.cn
 ```
 
-回调地址固定为 `https://<你的域名>/auth/feishu/callback`，并须在飞书应用的安全设置中登记。当前应用仍保留本地用户名密码登录与注册；飞书应用的可访问范围由飞书侧配置控制。
+在飞书应用中注册精确回调 URL：`https://reader.dex-gem.ai/auth/feishu/callback`（其他部署替换域名），并发布/审批 Web 应用。应用需要用户授权范围 **`im:chat:readonly`**；应用 bot 应加入目标 DexGEM 群。登录会先使用 OAuth 交换得到的**用户 access token**调用 `GET /open-apis/im/v1/chats/{chat_id}/members/is_in_chat`，只有返回 `is_in_chat=true` 才创建/登录本地用户。非成员与飞书 API 故障都显示 403 的群访问受限页面；不会创建本地账号。未设置 `PAPER_READER_FEISHU_ALLOWED_CHAT_ID` 时应用会记录警告并允许任意完成飞书登录的用户。
+
+成员资格只在登录时缓存；从群中移除成员在其下次登录时生效，最坏延迟受 `PAPER_READER_SESSION_TTL_HOURS` 约束。应用不会把飞书 access token 写进 SQLite 或浏览器 session。
+
+所有 POST、PUT 和 DELETE 请求使用 synchronizer CSRF token：服务器将 token 放进 session，每个 HTML 变更表单都带隐藏 `csrf_token` 字段，JavaScript `fetch()` 变更请求使用 `X-CSRFToken`。缺失或不匹配会返回 403。
 
 ### LLM（DexGEM LiteLLM 网关）
 

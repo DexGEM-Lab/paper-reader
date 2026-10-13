@@ -324,6 +324,7 @@
             <div class="viewer-tag-actions">
               {% if is_admin %}
                 <form action="{{ url_for('tag_generate_ai_route') }}" method="post" class="inline-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                   <input type="hidden" name="folder" value="{{ current_folder }}">
                   <input type="hidden" name="q" value="{{ query }}">
                   <input type="hidden" name="sort" value="{{ sort_by }}">
@@ -342,6 +343,7 @@
       {% if paper_date_editable %}
         <dialog class="paper-date-dialog" data-paper-date-dialog aria-labelledby="paper-date-dialog-title">
           <form action="{{ url_for('paper_date_route') }}" method="post" class="paper-date-dialog-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="folder" value="{{ current_folder }}">
             <input type="hidden" name="q" value="{{ query }}">
             <input type="hidden" name="sort" value="{{ sort_by }}">
@@ -400,6 +402,7 @@
                 <small>{{ 'AI Prompt' if tag.source_type == 'ai' else ('AI' if tag.source_type == 'auto' else ('官方' if tag.source_type == 'official' else '手动')) }}</small>
                 {% if is_admin or (tag.source_type == 'manual' and current_user and current_user.display_name == tag.added_by_display_name) %}
                   <form action="{{ url_for('tag_remove_route') }}" method="post" class="inline-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="folder" value="{{ current_folder }}">
                     <input type="hidden" name="q" value="{{ query }}">
                     <input type="hidden" name="sort" value="{{ sort_by }}">
@@ -420,6 +423,7 @@
 
       <div class="viewer-tag-editor" data-collapsible-body="tag-editor" hidden>
         <form action="{{ url_for('tag_add_route') }}" method="post" class="team-inline-form compact-form viewer-compact-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="folder" value="{{ current_folder }}">
           <input type="hidden" name="q" value="{{ query }}">
           <input type="hidden" name="sort" value="{{ sort_by }}">
@@ -452,6 +456,7 @@
                   {% endif %}
                   {% if selected_paper.fetch_status != 'ok' %}
                     <form action="{{ url_for('resource_retry_route') }}" method="post" class="inline-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                       <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
                       <button type="submit" class="secondary reader-mini-link">Retry fetch</button>
                     </form>
@@ -548,6 +553,7 @@
                     <a class="button-link secondary reader-mini-link" href="{{ url_for('serve_file', rel_path=selected_prompt_info.result_rel_path) }}" target="_blank" rel="noreferrer">MD</a>
                   {% endif %}
                   <form action="{{ url_for('prompt_run_route') }}" method="post" class="inline-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="folder" value="{{ current_folder }}">
                     <input type="hidden" name="q" value="{{ query }}">
                     <input type="hidden" name="sort" value="{{ sort_by }}">
@@ -576,6 +582,7 @@
                 </div>
               {% endif %}
               <form action="{{ url_for('prompt_run_route') }}" method="post" class="inline-form centered-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <input type="hidden" name="folder" value="{{ current_folder }}">
                 <input type="hidden" name="q" value="{{ query }}">
                 <input type="hidden" name="sort" value="{{ sort_by }}">
@@ -726,6 +733,7 @@
             </div>
           </div>
           <form action="{{ url_for('comment_route') }}" method="post" class="team-inline-form activity-comment-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="folder" value="{{ current_folder }}">
             <input type="hidden" name="q" value="{{ query }}">
             <input type="hidden" name="sort" value="{{ sort_by }}">
@@ -783,6 +791,7 @@
           </aside>
         </div>
         <form action="{{ url_for('chat_send_route') }}" method="post" class="team-inline-form" data-chat-form>
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="folder" value="{{ current_folder }}">
           <input type="hidden" name="q" value="{{ query }}">
           <input type="hidden" name="sort" value="{{ sort_by }}">
@@ -839,6 +848,7 @@
           </aside>
         </div>
         <form action="{{ url_for('chat_send_route') }}" method="post" class="team-inline-form" data-chat-form>
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="folder" value="{{ current_folder }}">
           <input type="hidden" name="q" value="{{ query }}">
           <input type="hidden" name="sort" value="{{ sort_by }}">
@@ -909,6 +919,7 @@
   </button>
   {% if selected_paper %}
     <form action="{{ url_for('recommend_route') }}" method="post" class="inline-form workspace-dock-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="folder" value="{{ current_folder }}">
       <input type="hidden" name="q" value="{{ query }}">
       <input type="hidden" name="sort" value="{{ sort_by }}">
@@ -950,6 +961,7 @@
       </button>
     {% endif %}
     <form action="{{ url_for('done_toggle_route') }}" method="post" class="inline-form workspace-dock-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="folder" value="{{ current_folder }}">
       <input type="hidden" name="q" value="{{ query }}">
       <input type="hidden" name="sort" value="{{ sort_by }}">
@@ -1001,6 +1013,7 @@
       </div>
       <div class="settings-user-actions">
         <form class="settings-avatar-form" action="{{ url_for('profile_avatar_route') }}" method="post" enctype="multipart/form-data">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="folder" value="{{ current_folder }}">
           <input type="hidden" name="q" value="{{ query }}">
           <input type="hidden" name="sort" value="{{ sort_by }}">
@@ -1085,6 +1098,7 @@
     <summary>上传与导入</summary>
     <div class="stacked-tool-grid">
       <form class="tool-grid upload-form-grid" id="upload-form" action="{{ url_for('upload') }}" method="post" enctype="multipart/form-data" data-upload-endpoint="{{ url_for('upload_file') }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="folder" value="{{ current_folder }}">
         <input type="hidden" name="q" value="{{ query }}">
         <input type="hidden" name="sort" value="{{ sort_by }}">
@@ -1138,6 +1152,7 @@
       </section>
 
       <form class="tool-grid" action="{{ url_for('import_link_route') }}" method="post">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="folder" value="{{ current_folder }}">
         <input type="hidden" name="q" value="{{ query }}">
         <input type="hidden" name="sort" value="{{ sort_by }}">
@@ -1158,6 +1173,7 @@
 
       {% if is_admin %}
         <form class="tool-grid" action="{{ url_for('create_folder_route') }}" method="post">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="folder" value="{{ current_folder }}">
           <input type="hidden" name="q" value="{{ query }}">
           <input type="hidden" name="sort" value="{{ sort_by }}">
@@ -1222,6 +1238,7 @@
     {% elif selected_paper %}
       <div class="stacked-tool-grid">
         <form class="tool-grid" action="{{ url_for('rename_route') }}" method="post">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="folder" value="{{ current_folder }}">
           <input type="hidden" name="q" value="{{ query }}">
           <input type="hidden" name="sort" value="{{ sort_by }}">
@@ -1243,6 +1260,7 @@
         </form>
 
         <form class="tool-grid danger-grid" action="{{ url_for('delete_route') }}" method="post">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="folder" value="{{ current_folder }}">
           <input type="hidden" name="q" value="{{ query }}">
           <input type="hidden" name="sort" value="{{ sort_by }}">
@@ -1259,6 +1277,7 @@
         </form>
 
         <form class="tool-grid compact-actions-grid" action="{{ url_for('reindex') }}" method="post">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="folder" value="{{ current_folder }}">
           <input type="hidden" name="q" value="{{ query }}">
           <input type="hidden" name="sort" value="{{ sort_by }}">
@@ -1284,6 +1303,7 @@
         {% if is_admin %}
           <div class="jobs-control-actions">
             <form class="jobs-config-form" action="{{ url_for('jobs_config_route') }}" method="post">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <input type="hidden" name="folder" value="{{ current_folder }}">
               <input type="hidden" name="q" value="{{ query }}">
               <input type="hidden" name="sort" value="{{ sort_by }}">
@@ -1297,6 +1317,7 @@
               <button type="submit" class="secondary">保存</button>
             </form>
             <form action="{{ url_for('jobs_stop_all_route') }}" method="post">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <input type="hidden" name="folder" value="{{ current_folder }}">
               <input type="hidden" name="q" value="{{ query }}">
               <input type="hidden" name="sort" value="{{ sort_by }}">
@@ -2952,7 +2973,11 @@
           const response = await fetch(chatStreamUrl, {
             method: "POST",
             body: new FormData(form),
-            headers: { "X-Requested-With": "fetch", "Accept": "application/x-ndjson" },
+            headers: {
+              "X-Requested-With": "fetch",
+              "Accept": "application/x-ndjson",
+              "X-CSRFToken": "{{ csrf_token() }}",
+            },
           });
           if (!response.ok) {
             const payload = await response.json().catch(() => ({}));

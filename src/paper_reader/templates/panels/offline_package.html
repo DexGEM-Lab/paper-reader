@@ -1,6 +1,7 @@
 <div class="lazy-panel-body">
   {% if filtered_papers %}
     <form class="batch-form" action="{{ url_for('offline_package_route') }}" method="post">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="folder" value="{{ current_folder }}">
       <input type="hidden" name="q" value="{{ query }}">
       <input type="hidden" name="sort" value="{{ sort_by }}">

@@ -20,6 +20,7 @@
 
   {% if batch_pagination.total %}
     <form class="batch-form" action="{{ url_for('prompt_batch_run_route') }}" method="post">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="folder" value="{{ current_folder }}">
       <input type="hidden" name="q" value="{{ query }}">
       <input type="hidden" name="sort" value="{{ sort_by }}">

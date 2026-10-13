@@ -11,15 +11,18 @@
     <div class="insights-head-actions">
       {% if insights_status.can_stop %}
         <form action="{{ url_for('insights_history_stop_route') }}" method="post" class="inline-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button type="submit" class="secondary">停止</button>
         </form>
       {% endif %}
       {% if insights_status.can_continue %}
         <form action="{{ url_for('insights_history_rebuild_route') }}" method="post" class="inline-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button type="submit">继续</button>
         </form>
       {% else %}
         <form action="{{ url_for('insights_history_rebuild_route') }}" method="post" class="inline-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button type="submit">{% if insights_status.cache_exists %}重新生成{% else %}重建历史脉络{% endif %}</button>
         </form>
       {% endif %}
@@ -189,6 +192,7 @@
       <h3>还没有历史脉络</h3>
       <p>这个子页面会读取你已经生成好的“核心解读”，先把论文重新整理成可浏览的历史主线，再做更高层的 insight。</p>
       <form action="{{ url_for('insights_history_rebuild_route') }}" method="post" class="inline-form centered-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit">开始第一次生成</button>
       </form>
     </section>
@@ -205,15 +209,18 @@
     <div class="insights-head-actions">
       {% if momentum_status.can_stop %}
         <form action="{{ url_for('insights_momentum_stop_route') }}" method="post" class="inline-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button type="submit" class="secondary">停止</button>
         </form>
       {% endif %}
       {% if momentum_status.can_continue %}
         <form action="{{ url_for('insights_momentum_rebuild_route') }}" method="post" class="inline-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button type="submit">继续</button>
         </form>
       {% else %}
         <form action="{{ url_for('insights_momentum_rebuild_route') }}" method="post" class="inline-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button type="submit">{% if momentum_status.cache_exists %}重新生成{% else %}构建 Momentum Radar{% endif %}</button>
         </form>
       {% endif %}
@@ -433,6 +440,7 @@
       <h3>还没有 Momentum Radar</h3>
       <p>这部分会读取已有“核心解读”，对最近 30/60/90 天的论文做趋势归纳，告诉你现在什么在快速升温、什么只是噪声。</p>
       <form action="{{ url_for('insights_momentum_rebuild_route') }}" method="post" class="inline-form centered-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit">开始第一次生成</button>
       </form>
     </section>
@@ -449,15 +457,18 @@
     <div class="insights-head-actions">
       {% if opportunity_status.can_stop %}
         <form action="{{ url_for('insights_opportunity_stop_route') }}" method="post" class="inline-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button type="submit" class="secondary">停止</button>
         </form>
       {% endif %}
       {% if opportunity_status.can_continue %}
         <form action="{{ url_for('insights_opportunity_rebuild_route') }}" method="post" class="inline-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button type="submit">继续</button>
         </form>
       {% else %}
         <form action="{{ url_for('insights_opportunity_rebuild_route') }}" method="post" class="inline-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button type="submit">{% if opportunity_status.cache_exists %}重新生成{% else %}构建 Opportunity Map{% endif %}</button>
         </form>
       {% endif %}
@@ -579,6 +590,7 @@
       <h3>还没有 Opportunity Map</h3>
       <p>这部分会在历史脉络与 momentum 之上继续往前一步，产出一个 next-bet memo：现在真正值得做什么，而不是继续无止境地多读几篇。</p>
       <form action="{{ url_for('insights_opportunity_rebuild_route') }}" method="post" class="inline-form centered-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit">开始第一次生成</button>
       </form>
     </section>

@@ -3,6 +3,7 @@
 {% macro local_login_form(next_url, locked, remaining_seconds, autofocus=False) %}
   <form class="auth-form" action="{{ url_for('login') }}" method="post">
     <input type="hidden" name="next" value="{{ next_url }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <label>
       <span>用户名</span>
       <input type="text" name="username" autocomplete="username" {% if locked %}disabled{% endif %} {% if autofocus %}autofocus{% endif %}>
@@ -16,7 +17,7 @@
     {% endif %}
     <div class="tool-actions auth-form-actions">
       <button type="submit" {% if locked %}disabled{% endif %}>登录</button>
-      <a class="button-link secondary" href="{{ url_for('register', next=next_url) }}">注册新账号</a>
+      {% if local_registration_enabled %}<a class="button-link secondary" href="{{ url_for('register', next=next_url) }}">注册新账号</a>{% endif %}
     </div>
   </form>
 {% endmacro %}
@@ -27,7 +28,7 @@
       <p class="eyebrow">Secure Access</p>
       {% if feishu_enabled %}
         <h2>使用飞书进入论文阅读器</h2>
-        <p class="hero-copy">团队成员优先通过飞书登录；本地账号入口已收起在下方。</p>
+        <p class="hero-copy">仅限 DexGEM 飞书群成员访问。</p>
       {% else %}
         <h2>登录团队论文阅读器</h2>
         <p class="hero-copy">请使用团队账号登录。密码连续输错 3 次会锁定 5 分钟；如果你是第一次来，也可以先注册一个 member 账号。</p>
@@ -43,13 +44,15 @@
         <p class="auth-helper">首次飞书登录会自动创建 member 账号；管理员可以在团队设置里调整角色。</p>
       </div>
 
-      <details class="manual-login-panel" {% if show_manual_login %}open{% endif %}>
-        <summary>账号密码登录</summary>
-        <div class="manual-login-content">
-          {{ local_login_form(next_url, locked, remaining_seconds, show_manual_login) }}
-        </div>
-      </details>
-    {% else %}
+      {% if local_login_enabled %}
+        <details class="manual-login-panel" {% if show_manual_login %}open{% endif %}>
+          <summary>账号密码登录</summary>
+          <div class="manual-login-content">
+            {{ local_login_form(next_url, locked, remaining_seconds, show_manual_login) }}
+          </div>
+        </details>
+      {% endif %}
+    {% elif local_login_enabled %}
       {{ local_login_form(next_url, locked, remaining_seconds, True) }}
     {% endif %}
   </div>
