@@ -311,8 +311,9 @@ def _failed_markdown(*, title: str, url: str, status: str, error: str) -> str:
 
 
 class WebResourceStore:
-    def __init__(self, library_root: Path):
+    def __init__(self, library_root: Path, *, fetch_max_bytes: int = 25 * 1024 * 1024):
         self.library_root = library_root.resolve()
+        self.fetch_max_bytes = fetch_max_bytes
         self.web_root = self.library_root / WEB_ROOT_NAME
         self.web_root.mkdir(parents=True, exist_ok=True)
         self._write_lock = threading.Lock()
@@ -385,7 +386,7 @@ class WebResourceStore:
         content = ""
         status = "ok"
         try:
-            response = fetch_public_url(target.raw_url)
+            response = fetch_public_url(target.raw_url, max_bytes=self.fetch_max_bytes)
             final_url = response.final_url
             content, extracted = extract_web_content(response, resource_kind=target.resource_kind)
             title = str(extracted.get("title") or title).strip()

@@ -408,7 +408,14 @@ def arxiv_version_number(arxiv_id: str | None) -> int:
 
 
 class PaperLibrary:
-    def __init__(self, root: Path, prompt_store: PromptStore, team_store: Any | None = None):
+    def __init__(
+        self,
+        root: Path,
+        prompt_store: PromptStore,
+        team_store: Any | None = None,
+        *,
+        page_fetch_max_bytes: int = 25 * 1024 * 1024,
+    ):
         self.root = root.resolve()
         self.root.mkdir(parents=True, exist_ok=True)
         self.cache_path = self.root / CACHE_FILE_NAME
@@ -418,7 +425,7 @@ class PaperLibrary:
         self.summary_root.mkdir(parents=True, exist_ok=True)
         self.arxiv_markdown_root = self.root / ARXIV_MARKDOWN_DIR_NAME
         self.arxiv_markdown_root.mkdir(parents=True, exist_ok=True)
-        self.web_resources = WebResourceStore(self.root)
+        self.web_resources = WebResourceStore(self.root, fetch_max_bytes=page_fetch_max_bytes)
         self.prompt_store = prompt_store
         self.team_store = team_store
         self._hash_cache: dict[str, tuple[float, int, str]] = {}
@@ -2129,7 +2136,12 @@ def create_app(
     if runtime_config.auth_mode != "feishu" and runtime_config.login_username and runtime_config.login_password:
         app.team_store.bootstrap_default_user(runtime_config.login_username, runtime_config.login_password)  # type: ignore[attr-defined]
     app.prompt_store = PromptStore(app.config["LIBRARY_ROOT"], app.team_store.db_path)  # type: ignore[attr-defined]
-    app.library = PaperLibrary(app.config["LIBRARY_ROOT"], app.prompt_store, app.team_store)  # type: ignore[attr-defined]
+    app.library = PaperLibrary(  # type: ignore[attr-defined]
+        app.config["LIBRARY_ROOT"],
+        app.prompt_store,
+        app.team_store,
+        page_fetch_max_bytes=runtime_config.fetch_page_max_bytes,
+    )
     app.login_guard = LoginGuard()  # type: ignore[attr-defined]
     app.history_store = HistoricalInsightsStore(app.config["LIBRARY_ROOT"])  # type: ignore[attr-defined]
     app.momentum_store = MomentumInsightsStore(app.config["LIBRARY_ROOT"])  # type: ignore[attr-defined]
@@ -2705,6 +2717,7 @@ def create_app(
                     download_url,
                     accept="application/pdf,*/*;q=0.1",
                     timeout=REMOTE_PDF_DOWNLOAD_TIMEOUT,
+                    max_bytes=runtime_config.fetch_max_bytes,
                 )
                 if not response.body.startswith(b"%PDF-"):
                     raise RuntimeError("The remote response is not a PDF document.")

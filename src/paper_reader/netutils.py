@@ -12,7 +12,9 @@ from urllib.parse import urljoin, urlsplit, urlunsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 DEFAULT_TIMEOUT_SECONDS = 30
-DEFAULT_MAX_BYTES = 25 * 1024 * 1024
+DEFAULT_PAGE_MAX_BYTES = 25 * 1024 * 1024
+DEFAULT_DOCUMENT_MAX_BYTES = 100 * 1024 * 1024
+DEFAULT_MAX_BYTES = DEFAULT_PAGE_MAX_BYTES
 DEFAULT_MAX_REDIRECTS = 5
 DEFAULT_USER_AGENT = "DexGEM-Paper-Reader/1.0 (+https://reader.dex-gem.ai)"
 _ALLOWED_SCHEMES = frozenset({"http", "https"})
@@ -211,7 +213,7 @@ def fetch_public_url(
     *,
     accept: str = "text/html,application/xhtml+xml,application/pdf;q=0.9,*/*;q=0.1",
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
-    max_bytes: int = DEFAULT_MAX_BYTES,
+    max_bytes: int = DEFAULT_PAGE_MAX_BYTES,
     max_redirects: int = DEFAULT_MAX_REDIRECTS,
     user_agent: str = DEFAULT_USER_AGENT,
     prefer_https: bool = True,

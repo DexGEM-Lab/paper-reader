@@ -9,6 +9,7 @@ from urllib.request import Request
 
 from src.paper_reader.action_queue import ActionRecord
 from src.paper_reader.ai_summary import extract_document_context
+from src.paper_reader.config import load_config
 from src.paper_reader.app import create_app
 from src.paper_reader.markdown_render import render_markdown
 from src.paper_reader.netutils import (
@@ -17,6 +18,7 @@ from src.paper_reader.netutils import (
     UnsafeURLError,
     _SafeRedirectHandler,
     _read_bounded,
+    fetch_public_url,
     validate_public_url,
 )
 from src.paper_reader.web_resources import classify_import_target, extract_web_content
@@ -71,6 +73,57 @@ class NetutilsTests(unittest.TestCase):
 
         with self.assertRaises(ResponseTooLargeError):
             _read_bounded(Response(), max_bytes=6)
+
+    def test_fetch_limit_configuration_uses_separate_document_and_page_bounds(self) -> None:
+        config = load_config(
+            project_dir=Path("/tmp/paper-reader-config"),
+            cwd=Path("/tmp/paper-reader-config"),
+            environ={
+                "PAPER_READER_ENV_FILE": "/tmp/paper-reader-config/missing.env",
+                "PAPER_READER_FETCH_MAX_BYTES": str(120 * 1024 * 1024),
+                "PAPER_READER_PAGE_FETCH_MAX_BYTES": str(20 * 1024 * 1024),
+            },
+        )
+        self.assertEqual(config.fetch_max_bytes, 120 * 1024 * 1024)
+        self.assertEqual(config.fetch_page_max_bytes, 20 * 1024 * 1024)
+
+    def test_document_fetch_accepts_over_25mib_when_configured(self) -> None:
+        class Response:
+            status = 200
+            headers = {"Content-Type": "application/pdf"}
+
+            def __init__(self, size: int) -> None:
+                self.remaining = size
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):  # noqa: ANN002, ANN003
+                return None
+
+            def geturl(self) -> str:
+                return "https://example.com/paper.pdf"
+
+            def read(self, size: int) -> bytes:
+                if not self.remaining:
+                    return b""
+                chunk_size = min(size, self.remaining)
+                self.remaining -= chunk_size
+                return b"x" * chunk_size
+
+        class Opener:
+            def open(self, request, timeout):  # noqa: ANN001
+                return Response(26 * 1024 * 1024)
+
+        with patch("src.paper_reader.netutils.build_opener", return_value=Opener()):
+            response = fetch_public_url(
+                "https://example.com/paper.pdf",
+                max_bytes=27 * 1024 * 1024,
+                prefer_https=False,
+                resolver=lambda *args, **kwargs: PUBLIC_DNS,
+            )
+
+        self.assertEqual(len(response.body), 26 * 1024 * 1024)
 
 
 class WebClassificationTests(unittest.TestCase):

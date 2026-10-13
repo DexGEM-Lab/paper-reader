@@ -127,6 +127,8 @@ class PaperReaderConfig:
     llm_timeout: float
     llm_context_tokens: int
     max_upload_bytes: int
+    fetch_max_bytes: int
+    fetch_page_max_bytes: int
 
     @property
     def feishu_enabled(self) -> bool:
@@ -220,5 +222,13 @@ def load_config(
         max_upload_bytes=_positive_int_setting(
             setting("PAPER_READER_MAX_UPLOAD_BYTES", str(100 * 1024 * 1024)),
             name="PAPER_READER_MAX_UPLOAD_BYTES",
+        ),
+        fetch_max_bytes=_positive_int_setting(
+            setting("PAPER_READER_FETCH_MAX_BYTES", str(100 * 1024 * 1024)),
+            name="PAPER_READER_FETCH_MAX_BYTES",
+        ),
+        fetch_page_max_bytes=_positive_int_setting(
+            setting("PAPER_READER_PAGE_FETCH_MAX_BYTES", str(25 * 1024 * 1024)),
+            name="PAPER_READER_PAGE_FETCH_MAX_BYTES",
         ),
     )
