@@ -114,6 +114,18 @@ PAPER_READER_LLM_CONTEXT_TOKENS=12000
 
 脚本直接使用与 Web UI 相同的 action queue、资料库和 SQLite store。默认 resume 行为会跳过已有 canonical URL；加 `--no-resume` 可刷新现有网页快照。每条飞书出处以 `source_type=feishu` 保存 chat name、消息上下文、发送者 open ID 和时间。
 
+## 生产部署（DexGEM）
+
+`reader.dex-gem.ai` 的生产拓扑为：公网 `:443` 的 nginx stream SNI 路由到本机 nginx TLS vhost（`127.0.0.1:8443`），该 vhost 再代理到仅监听回环地址的 Gunicorn（`127.0.0.1:8010`）。应用以 `paper-reader` 系统用户运行；代码位于 `/opt/paper-reader/app`，运行数据位于 `/opt/paper-reader/data`，凭据由 root 管理的 `/etc/paper-reader/{litellm.env,paper-reader.env}` 提供。
+
+使用单个 Gunicorn worker，因为应用内的后台任务队列是进程内队列；生产启动命令固定为：
+
+```bash
+gunicorn --workers 1 --threads 8 --bind 127.0.0.1:8010 "src.paper_reader.wsgi:app"
+```
+
+`wsgi.py` 是生产入口；`run.py` 保留给本地开发。systemd 应设置 `PYTHONPATH=/opt/paper-reader/app`，读取两个环境文件，并只允许服务用户写入数据与备份目录。Nginx 必须同时配置 `reader.dex-gem.ai` 的 stream SNI 映射、内部 TLS vhost 和明确的 `:80` HTTPS 重定向。
+
 ## 环境准备
 
 建议使用 Python 3.11+。
