@@ -15,94 +15,59 @@
 - Insights 页面：基于已有“核心解读”生成历史脉络，并用时间线方式可视化
 - 登录保护：支持本地用户名密码，也支持可选的飞书 OAuth 登录
 
-## 默认配置
+## 配置
 
-### 服务地址
+运行时配置从项目根目录的 `.env` 读取，进程环境变量优先级更高；也可用 `PAPER_READER_ENV_FILE` 指向另一个 dotenv 文件。`.env` 已被忽略，不能提交真实凭据。
 
-- Host: `0.0.0.0`
-- Port: `8000`
+### 服务与存储
 
-### 默认数据目录
+默认值均相对于**启动命令的当前工作目录**：
 
-所有论文和运行数据默认都保存在：
+- `PAPER_READER_HOST=0.0.0.0`
+- `PAPER_READER_PORT=8000`
+- `PAPER_READER_DATA_DIR=./data`
+- `PAPER_READER_LIBRARY_DIR=./data/library`
+- `PAPER_READER_SOURCES_ARCHIVE_DIR=./data/sources/huggingface_daily`
 
-- `/vePFS-Mindverse/share/paper-reader/`
+`PAPER_READER_LIBRARY_DIR` 和 `PAPER_READER_SOURCES_ARCHIVE_DIR` 覆盖各自目录；未设置时从 `PAPER_READER_DATA_DIR` 派生。主论文库、SQLite 协作数据、Prompt 结果和 Sources 归档都在这些目录中，不随 Git 提交。
 
-其中主要子目录为：
+### 身份与管理员初始化
 
-- `/vePFS-Mindverse/share/paper-reader/library/`：主论文库、Prompt 结果、设置和索引
-- `/vePFS-Mindverse/share/paper-reader/sources/huggingface_daily/`：Sources 页面使用的外部抓取归档
+没有内置用户名、密码或 Flask session secret。生产环境必须设置稳定的 `PAPER_READER_SECRET_KEY`。未设置时应用为当前进程生成随机 session secret 并记录警告；重启后所有 session 会失效。
 
-放进 `library/` 的 PDF / Word 文件会被自动扫描识别。这样把运行目录放到共享盘后，团队成员就能围绕同一份论文库、同一套 Prompt 结果和同一批 Sources 数据协作。
-
-### 默认登录信息
-
-- 用户名：`admin`
-- 密码：`paperpaperreaderreader12678`
-
-安全限制：
-
-- 连续输错密码 3 次后，会锁定 5 分钟
-
-### 使用 `.env` 覆盖登录信息
-
-如果项目根目录存在 `.env`，系统会优先读取其中的登录配置；一旦配置了 `.env`，默认用户名和密码将不再生效。
-
-可配置项：
-
-- `PAPER_READER_LOGIN_USERNAME`
-- `PAPER_READER_LOGIN_PASSWORD`
-
-示例：
+可选的本地管理员登录必须同时设置以下两项：
 
 ```dotenv
 PAPER_READER_LOGIN_USERNAME=admin
-PAPER_READER_LOGIN_PASSWORD=replace-with-your-own-password
+PAPER_READER_LOGIN_PASSWORD=replace-with-a-unique-password
 ```
 
-说明：
+若未配置这对凭据，应用不在启动时创建本地账号；第一个成功注册或首次飞书登录的用户会成为管理员。也可显式指定管理员用户名列表：
 
-- `.env` 已被 `.gitignore` 忽略，不会默认提交到 Git
-- 建议在部署后立即用你自己的密码覆盖默认密码
-- 不要把你自己的真实密码写进 README 或提交到 GitHub
+```dotenv
+PAPER_READER_ADMIN_USERS=admin,operations-admin
+```
 
-### 启用飞书登录
+该列表仅是部署配置，取代了源代码中的命名管理员。连续输错本地密码 3 次会锁定 5 分钟。
 
-如果你希望在登录页显示“使用飞书登录”，需要在项目根目录的 `.env` 里增加下面几项：
+### 飞书 OAuth
 
-- `PAPER_READER_SECRET_KEY`
-- `PAPER_READER_BASE_URL`
-- `PAPER_READER_FEISHU_APP_ID`
-- `PAPER_READER_FEISHU_APP_SECRET`
-
-示例：
+启用飞书登录需要：
 
 ```dotenv
 PAPER_READER_SECRET_KEY=replace-with-a-random-secret
-PAPER_READER_BASE_URL=https://paper-reader.example.com
+PAPER_READER_BASE_URL=https://reader.example.com
 PAPER_READER_FEISHU_APP_ID=cli_xxx
 PAPER_READER_FEISHU_APP_SECRET=xxx
+# 可选；默认 https://open.feishu.cn
+PAPER_READER_FEISHU_API_BASE_URL=https://open.feishu.cn
 ```
 
-回调地址固定为：
+回调地址固定为 `https://<你的域名>/auth/feishu/callback`，并须在飞书应用的安全设置中登记。当前应用仍保留本地用户名密码登录与注册；飞书应用的可访问范围由飞书侧配置控制。
 
-```text
-https://<你的域名>/auth/feishu/callback
-```
+### LLM 配置占位
 
-例如：
-
-```text
-https://paper-reader.example.com/auth/feishu/callback
-```
-
-飞书侧的配置路径是：应用详情页 -> 安全设置 -> 重定向 URL。把上面的完整回调地址加进去。
-
-实现细节：
-
-- 本地用户名密码登录仍然保留
-- 首次通过飞书登录会自动创建一个本地 `member` 账号
-- 如果需要管理员权限，先用本地管理员账号登录，再到团队设置里调整角色
+配置模块保留 `PAPER_READER_LLM_BASE_URL`、`PAPER_READER_LLM_API_KEY` 与 `PAPER_READER_LLM_MODEL`，供后续 LLM transport 迁移使用。当前实现仍调用本机 `codex` CLI，尚不消费这些值。
 
 ## 环境准备
 
@@ -128,12 +93,13 @@ python3 -m venv .venv
 .venv/bin/python run.py
 ```
 
-如果你希望使用自定义登录信息，建议先在项目根目录创建 `.env`：
+部署前请在项目根目录创建 `.env`，至少设置稳定的 session secret；如需本地密码登录，再同时设置用户名和密码：
 
 ```bash
 cat > .env <<'EOF'
+PAPER_READER_SECRET_KEY=replace-with-a-long-random-value
 PAPER_READER_LOGIN_USERNAME=admin
-PAPER_READER_LOGIN_PASSWORD=replace-with-your-own-password
+PAPER_READER_LOGIN_PASSWORD=replace-with-a-unique-password
 EOF
 ```
 
@@ -180,9 +146,9 @@ paper-reader/
 │   └── templates/
 └── tests/
 
-/vePFS-Mindverse/share/paper-reader/
-├── library/                    # 主论文库（默认）
-└── sources/huggingface_daily/  # 外部来源归档（默认）
+./data/                         # 默认数据根目录（相对于启动时 cwd）
+├── library/                    # 主论文库、SQLite 和生成结果
+└── sources/huggingface_daily/  # 外部来源归档
 ```
 
 ## 论文库说明
@@ -232,11 +198,7 @@ paper-reader/
 
 ### Sources 数据目录
 
-默认会从下面这个目录读取外部归档数据：
-
-- `/vePFS-Mindverse/share/paper-reader/sources/huggingface_daily/`
-
-这个目录位于仓库外，因此不会提交到 GitHub。
+默认从 `./data/sources/huggingface_daily/`（相对于启动时 cwd）读取外部归档；用 `PAPER_READER_SOURCES_ARCHIVE_DIR` 可以覆盖它。该目录是运行数据，不会提交到 Git。
 
 ### Hugging Face 抓取子项目
 
@@ -253,16 +215,14 @@ paper-reader/
 直接运行一次采集：
 
 ```bash
-PYTHONPATH=paper-reader-source python3 -m paper_reader_source.service \
-  --data-dir /vePFS-Mindverse/share/paper-reader/sources/huggingface_daily \
+PYTHONPATH=.:paper-reader-source .venv/bin/python -m paper_reader_source.service \
   --run-on-start --once
 ```
 
 长期运行定时服务：
 
 ```bash
-PYTHONPATH=paper-reader-source python3 -m paper_reader_source.service \
-  --data-dir /vePFS-Mindverse/share/paper-reader/sources/huggingface_daily
+PYTHONPATH=.:paper-reader-source .venv/bin/python -m paper_reader_source.service
 ```
 
 或者直接用仓库里自带的脚本：
@@ -347,6 +307,6 @@ paper-reader-source/scripts/run_huggingface_daily_service.sh
 
 ## 开发备注
 
-- 默认运行数据现在写到 `/vePFS-Mindverse/share/paper-reader/`，不会跟随仓库提交
+- 默认运行数据写到启动目录下的 `data/`，不会跟随仓库提交
 - 日志目录 `logs/` 默认不会提交到 Git
 - 运行过程中生成的本地状态文件也已加入 `.gitignore`

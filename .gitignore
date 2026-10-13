@@ -33,5 +33,7 @@ docs/papers/
 *.explained.zh.md
 .paper-reader-*.json
 .paper-reader-ai/
-# Paper Reader Source service data
+# Paper Reader runtime data
+data/
 paper-reader-source/data/
+.memory/
