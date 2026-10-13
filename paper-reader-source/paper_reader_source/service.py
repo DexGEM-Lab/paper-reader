@@ -6,6 +6,8 @@ from datetime import date, datetime, time, timedelta, timezone
 import json
 from pathlib import Path
 import time as time_module
+
+from src.paper_reader.config import load_config
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -17,8 +19,10 @@ BEIJING_TZ = ZoneInfo("Asia/Shanghai")
 DEFAULT_SCHEDULE_TIME = time(hour=18, minute=30)
 DEFAULT_POLL_SECONDS = 30
 DEFAULT_MIN_UPVOTES = 5
-DEFAULT_STORAGE_ROOT = Path("/vePFS-Mindverse/share/paper-reader")
-DEFAULT_DATA_DIR = DEFAULT_STORAGE_ROOT / "sources" / "huggingface_daily"
+
+
+def default_data_dir() -> Path:
+    return load_config().source_archive_dir
 STATE_FILE_NAME = "service_state.json"
 MANIFEST_FILE_NAME = "manifest.json"
 PDF_SUBDIR_NAME = "papers"
@@ -65,7 +69,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--data-dir",
-        default=str(DEFAULT_DATA_DIR),
+        default=str(default_data_dir()),
         help="Directory where daily snapshots and PDFs are saved.",
     )
     parser.add_argument(

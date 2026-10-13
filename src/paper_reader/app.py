@@ -3,7 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 import json
-import os
+import logging
 import queue
 import re
 import shutil
@@ -40,6 +40,7 @@ from .arxiv_markdown import (
 )
 from .chat_ai import answer_question_about_document
 from .chat_queue import PaperChatQueue
+from .config import PaperReaderConfig, load_config, load_env_file_values, normalize_public_base_url
 from .document_utils import ALLOWED_EXTENSIONS, extract_document_metadata
 from .insights_history import HistoricalInsightsStore, extract_digest
 from .insights_momentum import MomentumInsightsStore
@@ -61,23 +62,18 @@ AVATAR_DIR_NAME = ".paper-reader-avatars"
 UPLOAD_STAGING_DIR_NAME = ".paper-reader-upload-staging"
 ALLOWED_AVATAR_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 DEFAULT_BATCH_PANEL_PAGE_SIZE = 50
-DEFAULT_LOGIN_USERNAME = "admin"
-DEFAULT_LOGIN_PASSWORD = "paperpaperreaderreader12678"
-DEFAULT_SECRET_KEY = "paper-reader-dev-secret"
 MAX_LOGIN_FAILURES = 3
 LOGIN_LOCK_SECONDS = 5 * 60
 REMOTE_PDF_DOWNLOAD_TIMEOUT = 180
 REMOTE_PDF_DOWNLOAD_ATTEMPTS = 3
 REMOTE_PDF_DOWNLOAD_CHUNK_SIZE = 128 * 1024
-DEFAULT_STORAGE_ROOT = Path("/vePFS-Mindverse/share/paper-reader")
-DEFAULT_LIBRARY_ROOT = DEFAULT_STORAGE_ROOT / "library"
-DEFAULT_SOURCE_ARCHIVE_ROOT = DEFAULT_STORAGE_ROOT / "sources" / "huggingface_daily"
 FEISHU_LOGIN_REDIRECT_PATH = "/auth/feishu/callback"
 FEISHU_AUTH_PAGE_URL = "https://open.feishu.cn/open-apis/authen/v1/index"
 FEISHU_APP_ACCESS_TOKEN_URL = "https://open.feishu.cn/open-apis/auth/v3/app_access_token/internal"
 FEISHU_USER_ACCESS_TOKEN_URL = "https://open.feishu.cn/open-apis/authen/v1/access_token"
 FEISHU_USER_INFO_URL = "https://open.feishu.cn/open-apis/authen/v1/user_info"
 FEISHU_USERNAME_PREFIX = "feishu-"
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -85,11 +81,28 @@ class FeishuOAuthConfig:
     app_id: str
     app_secret: str
     base_url: str
+    api_base_url: str
     redirect_path: str = FEISHU_LOGIN_REDIRECT_PATH
 
     @property
     def callback_url(self) -> str:
         return build_external_url(self.base_url, self.redirect_path)
+
+    @property
+    def auth_page_url(self) -> str:
+        return f"{self.api_base_url}/open-apis/authen/v1/index"
+
+    @property
+    def app_access_token_url(self) -> str:
+        return f"{self.api_base_url}/open-apis/auth/v3/app_access_token/internal"
+
+    @property
+    def user_access_token_url(self) -> str:
+        return f"{self.api_base_url}/open-apis/authen/v1/access_token"
+
+    @property
+    def user_info_url(self) -> str:
+        return f"{self.api_base_url}/open-apis/authen/v1/user_info"
 
 
 @dataclass
@@ -1813,95 +1826,32 @@ def paginate_items(items: list[Any], page: int, page_size: int) -> dict[str, Any
     }
 
 
-def load_env_file_values(path: Path) -> dict[str, str]:
-    if not path.exists():
-        return {}
-
-    values: dict[str, str] = {}
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith("export "):
-            line = line[7:].strip()
-        if "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        value = value.strip()
-        if not key:
-            continue
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
-            value = value[1:-1]
-        values[key] = value
-    return values
-
-
-def resolve_runtime_env_values(base_dir: Path) -> dict[str, str]:
-    env_file_path = Path(os.environ.get("PAPER_READER_ENV_FILE", str(base_dir / ".env")))
-    return load_env_file_values(env_file_path)
-
-
-def env_setting(env_values: dict[str, str], key: str, default: str = "") -> str:
-    return env_values.get(key) or os.environ.get(key) or default
-
-
-def resolve_login_credentials(base_dir: Path) -> tuple[str, str]:
-    env_values = resolve_runtime_env_values(base_dir)
-    username = env_setting(env_values, "PAPER_READER_LOGIN_USERNAME", DEFAULT_LOGIN_USERNAME)
-    password = env_setting(env_values, "PAPER_READER_LOGIN_PASSWORD", DEFAULT_LOGIN_PASSWORD)
-    return username, password
-
-
-def resolve_secret_key(base_dir: Path) -> str:
-    env_values = resolve_runtime_env_values(base_dir)
-    return env_setting(env_values, "PAPER_READER_SECRET_KEY", DEFAULT_SECRET_KEY)
-
-
-def normalize_public_base_url(raw_value: str) -> str:
-    value = (raw_value or "").strip().rstrip("/")
-    if not value:
-        return ""
-
-    parsed = urlparse(value)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.query or parsed.fragment:
-        raise ValueError("PAPER_READER_BASE_URL 必须是完整的 http/https 地址，不能带 query 或 fragment。")
-
-    path = parsed.path.rstrip("/")
-    return f"{parsed.scheme}://{parsed.netloc}{path}"
-
-
 def build_external_url(base_url: str, path: str) -> str:
     cleaned_path = "/" + path.lstrip("/")
     cleaned_base = normalize_public_base_url(base_url)
     return f"{cleaned_base}{cleaned_path}" if cleaned_base else cleaned_path
 
 
-def resolve_public_base_url(base_dir: Path) -> str:
-    env_values = resolve_runtime_env_values(base_dir)
-    return normalize_public_base_url(env_setting(env_values, "PAPER_READER_BASE_URL", ""))
-
-
-def resolve_feishu_oauth_config(base_dir: Path) -> FeishuOAuthConfig | None:
-    env_values = resolve_runtime_env_values(base_dir)
-    app_id = env_setting(env_values, "PAPER_READER_FEISHU_APP_ID", "").strip()
-    app_secret = env_setting(env_values, "PAPER_READER_FEISHU_APP_SECRET", "").strip()
-    base_url = resolve_public_base_url(base_dir)
-
-    if not app_id and not app_secret and not base_url:
+def resolve_feishu_oauth_config(config: PaperReaderConfig) -> FeishuOAuthConfig | None:
+    if not config.feishu_enabled:
         return None
 
     missing: list[str] = []
-    if not base_url:
+    if not config.public_base_url:
         missing.append("PAPER_READER_BASE_URL")
-    if not app_id:
+    if not config.feishu_app_id:
         missing.append("PAPER_READER_FEISHU_APP_ID")
-    if not app_secret:
+    if not config.feishu_app_secret:
         missing.append("PAPER_READER_FEISHU_APP_SECRET")
     if missing:
         raise ValueError(f"启用飞书登录缺少配置: {', '.join(missing)}")
 
-    return FeishuOAuthConfig(app_id=app_id, app_secret=app_secret, base_url=base_url)
+    return FeishuOAuthConfig(
+        app_id=config.feishu_app_id,
+        app_secret=config.feishu_app_secret,
+        base_url=config.public_base_url,
+        api_base_url=config.feishu_api_base_url,
+    )
 
 
 def build_feishu_username(identity_key: str) -> str:
@@ -1971,7 +1921,7 @@ def feishu_response_message(payload: dict[str, Any]) -> str:
 
 def fetch_feishu_app_access_token(config: FeishuOAuthConfig) -> str:
     payload = open_json_request(
-        FEISHU_APP_ACCESS_TOKEN_URL,
+        config.app_access_token_url,
         method="POST",
         payload={"app_id": config.app_id, "app_secret": config.app_secret},
     )
@@ -1985,7 +1935,7 @@ def fetch_feishu_app_access_token(config: FeishuOAuthConfig) -> str:
 
 def fetch_feishu_user_access_token(config: FeishuOAuthConfig, app_access_token: str, code: str) -> str:
     payload = open_json_request(
-        FEISHU_USER_ACCESS_TOKEN_URL,
+        config.user_access_token_url,
         method="POST",
         headers={"Authorization": f"Bearer {app_access_token}"},
         payload={"grant_type": "authorization_code", "code": code, "app_id": config.app_id},
@@ -2001,9 +1951,9 @@ def fetch_feishu_user_access_token(config: FeishuOAuthConfig, app_access_token: 
     return token
 
 
-def fetch_feishu_user_profile(user_access_token: str) -> dict[str, Any]:
+def fetch_feishu_user_profile(config: FeishuOAuthConfig, user_access_token: str) -> dict[str, Any]:
     payload = open_json_request(
-        FEISHU_USER_INFO_URL,
+        config.user_info_url,
         headers={"Authorization": f"Bearer {user_access_token}"},
     )
     if payload.get("code") not in {0, "0"}:
@@ -2038,37 +1988,47 @@ def redirect_to_index(
 
 
 
-def create_app(library_root: Path | None = None, source_archive_root: Path | None = None) -> Flask:
-    base_dir = Path(__file__).resolve().parents[2]
-    root = (library_root or DEFAULT_LIBRARY_ROOT).resolve()
-    source_root = (source_archive_root or DEFAULT_SOURCE_ARCHIVE_ROOT).resolve()
+def create_app(
+    library_root: Path | None = None,
+    source_archive_root: Path | None = None,
+    *,
+    config: PaperReaderConfig | None = None,
+) -> Flask:
+    runtime_config = config or load_config()
+    root = (library_root or runtime_config.library_dir).resolve()
+    source_root = (source_archive_root or runtime_config.source_archive_dir).resolve()
     root.mkdir(parents=True, exist_ok=True)
     source_root.mkdir(parents=True, exist_ok=True)
-    login_username, login_password = resolve_login_credentials(base_dir)
-    secret_key = resolve_secret_key(base_dir)
-    public_base_url = resolve_public_base_url(base_dir)
-    feishu_oauth = resolve_feishu_oauth_config(base_dir)
+    feishu_oauth = resolve_feishu_oauth_config(runtime_config)
+    if runtime_config.secret_key_is_ephemeral:
+        LOGGER.warning("PAPER_READER_SECRET_KEY is unset; using an ephemeral secret key. Sessions will reset on restart.")
     app = Flask(
         __name__,
         template_folder=str(Path(__file__).with_name("templates")),
         static_folder=str(Path(__file__).with_name("static")),
     )
-    app.config["SECRET_KEY"] = secret_key
+    app.config["SECRET_KEY"] = runtime_config.secret_key
     app.config["LIBRARY_ROOT"] = root.resolve()
     app.config["SOURCE_ARCHIVE_ROOT"] = source_root.resolve()
     app.config["AVATAR_ROOT"] = (root / AVATAR_DIR_NAME).resolve()
     Path(app.config["AVATAR_ROOT"]).mkdir(parents=True, exist_ok=True)
     app.config["UPLOAD_STAGING_ROOT"] = (root / UPLOAD_STAGING_DIR_NAME).resolve()
     Path(app.config["UPLOAD_STAGING_ROOT"]).mkdir(parents=True, exist_ok=True)
-    app.config["LOGIN_USERNAME"] = login_username
-    app.config["LOGIN_PASSWORD"] = login_password
-    app.config["PUBLIC_BASE_URL"] = public_base_url
+    app.config["LOGIN_USERNAME"] = runtime_config.login_username
+    app.config["LOGIN_PASSWORD"] = runtime_config.login_password
+    app.config["PUBLIC_BASE_URL"] = runtime_config.public_base_url
     app.config["FEISHU_OAUTH"] = feishu_oauth
+    app.config["LLM_BASE_URL"] = runtime_config.llm_base_url
+    app.config["LLM_API_KEY"] = runtime_config.llm_api_key
+    app.config["LLM_MODEL"] = runtime_config.llm_model
     app.config["SESSION_COOKIE_HTTPONLY"] = True
     app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
     app.settings_store = SettingsStore(app.config["LIBRARY_ROOT"])  # type: ignore[attr-defined]
-    app.team_store = TeamStore(app.config["LIBRARY_ROOT"])  # type: ignore[attr-defined]
-    app.team_store.bootstrap_default_user(login_username, login_password)  # type: ignore[attr-defined]
+    app.team_store = TeamStore(  # type: ignore[attr-defined]
+        app.config["LIBRARY_ROOT"], admin_usernames=runtime_config.admin_usernames
+    )
+    if runtime_config.login_username and runtime_config.login_password:
+        app.team_store.bootstrap_default_user(runtime_config.login_username, runtime_config.login_password)  # type: ignore[attr-defined]
     app.prompt_store = PromptStore(app.config["LIBRARY_ROOT"], app.team_store.db_path)  # type: ignore[attr-defined]
     app.library = PaperLibrary(app.config["LIBRARY_ROOT"], app.prompt_store, app.team_store)  # type: ignore[attr-defined]
     app.login_guard = LoginGuard()  # type: ignore[attr-defined]
@@ -2369,7 +2329,7 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
             "redirect_uri": config.callback_url,
             "state": state,
         }
-        return redirect(f"{FEISHU_AUTH_PAGE_URL}?{urlencode(params)}")
+        return redirect(f"{config.auth_page_url}?{urlencode(params)}")
 
     @app.get(FEISHU_LOGIN_REDIRECT_PATH)
     def feishu_callback() -> Any:
@@ -2398,7 +2358,7 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         try:
             app_access_token = fetch_feishu_app_access_token(config)
             user_access_token = fetch_feishu_user_access_token(config, app_access_token, code)
-            profile = fetch_feishu_user_profile(user_access_token)
+            profile = fetch_feishu_user_profile(config, user_access_token)
             user = sync_feishu_user(profile)
         except (PermissionError, ValueError) as exc:
             flash(str(exc), "error")
@@ -5157,10 +5117,3 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         return redirect_to_index(current_folder, query, sort_by, selected_paper, tab, show_done=show_done)
 
     return app
-
-
-app = create_app()
-
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8000, debug=False)

@@ -9,11 +9,15 @@ from pathlib import Path
 from urllib.request import urlopen
 
 from src.paper_reader.ai_summary import DEFAULT_MODEL, explain_document
+from src.paper_reader.config import load_config
 
 DEFAULT_URL = "https://arxiv.org/pdf/2501.12948"
-DEFAULT_STORAGE_ROOT = Path("/vePFS-Mindverse/share/paper-reader")
-DEFAULT_DOCUMENT_PATH = DEFAULT_STORAGE_ROOT / "library" / "2501.12948.pdf"
-DEFAULT_OUTPUT_PATH = DEFAULT_STORAGE_ROOT / "library" / "2501.12948.explained.zh.md"
+
+
+def default_document_paths() -> tuple[Path, Path]:
+    library_dir = load_config().library_dir
+    document_path = library_dir / "2501.12948.pdf"
+    return document_path, document_path.with_suffix(".explained.zh.md")
 
 
 def download_file(url: str, destination: Path, force: bool = False) -> Path:
@@ -26,6 +30,7 @@ def download_file(url: str, destination: Path, force: bool = False) -> Path:
 
 
 def parse_args() -> argparse.Namespace:
+    default_document_path, default_output_path = default_document_paths()
     parser = argparse.ArgumentParser(
         description="Download a paper if needed and ask Codex to explain the local PDF / DOC / DOCX document."
     )
@@ -33,14 +38,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--input",
         type=Path,
-        default=DEFAULT_DOCUMENT_PATH,
-        help=f"Local document path (default: {DEFAULT_DOCUMENT_PATH})",
+        default=default_document_path,
+        help=f"Local document path (default: {default_document_path})",
     )
     parser.add_argument(
         "--output",
         type=Path,
-        default=DEFAULT_OUTPUT_PATH,
-        help=f"Output markdown path (default: {DEFAULT_OUTPUT_PATH})",
+        default=default_output_path,
+        help=f"Output markdown path (default: {default_output_path})",
     )
     parser.add_argument("--model", default=DEFAULT_MODEL, help="Model name")
     parser.add_argument(
