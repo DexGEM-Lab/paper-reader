@@ -1,0 +1,89 @@
+/* DexGEM design tokens — canonical values from the design-language brief.
+   Single source of truth for palette, type, geometry. Loaded before style.css. */
+
+@font-face {
+  font-family: "Inter";
+  src: url("fonts/Inter-400.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Inter";
+  src: url("fonts/Inter-600.woff2") format("woff2");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Inter";
+  src: url("fonts/Inter-700.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Space Grotesk";
+  src: url("fonts/SpaceGrotesk-500.woff2") format("woff2");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Space Grotesk";
+  src: url("fonts/SpaceGrotesk-700.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  color-scheme: light;
+
+  /* Canonical palette */
+  --paper: #F3F6FA;
+  --ink: #202846;
+  --ink-60: #687087;
+  --ink-30: #AEB4C1;
+  --hairline: #D5DAE3;
+  --sapphire: #1E5FC2;
+  --sapphire-deep: #174E9F;
+  --sapphire-wash: rgba(30, 95, 194, 0.07);
+  --cyan: #00B4D8;
+  --cyan-on-ink: #79D9ED;
+  --yellow: #FFDF31;
+  --red: #EC5B45;
+  --red-deep: #C74330;
+  --wash: #E9EFF8; /* paper-derived secondary tint */
+
+  /* Geometry */
+  --border-strong: 1px solid var(--ink);
+  --border-quiet: 1px solid var(--hairline);
+  --radius: 0px;
+  --radius-control: 2px;
+  --focus: 0 0 0 2px var(--sapphire);
+
+  /* Type stacks */
+  --font-display: "Space Grotesk", "Inter", "Noto Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --font-text: "Inter", "Noto Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", Consolas, monospace;
+
+  /* Product type scale */
+  --text-meta: 11px;
+  --text-label: 12px;
+  --text-ui: 14px;
+  --text-body: 16px;
+  --text-section: 22px;
+
+  /* 8px spacing rhythm */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 16px;
+  --space-4: 24px;
+  --space-5: 32px;
+  --space-6: 48px;
+
+  /* App chrome dimensions */
+  --topbar-height: 60px;
+  --motion: 140ms ease;
+}
