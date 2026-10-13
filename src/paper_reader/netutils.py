@@ -8,7 +8,7 @@ import ssl
 from dataclasses import dataclass
 from typing import Callable, Iterable, Mapping
 from urllib.error import HTTPError, URLError
-from urllib.parse import urljoin, urlsplit, urlunsplit
+from urllib.parse import quote, urljoin, urlsplit, urlunsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 DEFAULT_TIMEOUT_SECONDS = 30
@@ -60,6 +60,20 @@ class FetchedResponse:
 Resolver = Callable[..., Iterable[tuple]]
 
 
+def quote_url_path(url: str) -> str:
+    """Percent-encode URL path/query characters without double-encoding escapes."""
+    parsed = urlsplit(str(url or "").strip())
+    return urlunsplit(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            quote(parsed.path, safe="/%:@!$&'()*+,;=-._~"),
+            quote(parsed.query, safe="%!$&'()*+,;=:/?@-._~"),
+            parsed.fragment,
+        )
+    )
+
+
 def _normalized_host(parsed) -> str:
     try:
         host = parsed.hostname
@@ -83,7 +97,7 @@ def validate_public_url(url: str, *, resolver: Resolver = socket.getaddrinfo) ->
     private address in the underlying HTTP client.
     """
 
-    value = str(url or "").strip()
+    value = quote_url_path(url)
     parsed = urlsplit(value)
     if parsed.scheme.casefold() not in _ALLOWED_SCHEMES:
         raise UnsafeURLError("Only HTTP and HTTPS URLs are allowed.")
@@ -144,8 +158,7 @@ class _SafeRedirectHandler(HTTPRedirectHandler):
         redirect_count = int(getattr(req, "_paper_reader_redirect_count", 0)) + 1
         if redirect_count > self._max_redirects:
             raise TooManyRedirectsError(f"Too many redirects (maximum {self._max_redirects}).")
-        absolute_url = urljoin(req.full_url, newurl)
-        validate_public_url(absolute_url, resolver=self._resolver)
+        absolute_url = validate_public_url(urljoin(req.full_url, newurl), resolver=self._resolver)
         redirected = super().redirect_request(req, fp, code, msg, headers, absolute_url)
         if redirected is not None:
             redirected._paper_reader_redirect_count = redirect_count
@@ -182,14 +195,13 @@ def _fetch_once(
     max_redirects: int,
     resolver: Resolver,
 ) -> FetchedResponse:
-    validate_public_url(url, resolver=resolver)
+    url = validate_public_url(url, resolver=resolver)
     opener = build_opener(_SafeRedirectHandler(resolver=resolver, max_redirects=max_redirects))
     request = Request(url, headers=dict(headers), method="GET")
     try:
         with opener.open(request, timeout=timeout) as response:
-            final_url = str(response.geturl() or url)
             # A custom handler or non-HTTP response must not bypass the redirect check.
-            validate_public_url(final_url, resolver=resolver)
+            final_url = validate_public_url(str(response.geturl() or url), resolver=resolver)
             body = _read_bounded(response, max_bytes=max_bytes)
             response_headers = {str(key): str(value) for key, value in response.headers.items()}
             return FetchedResponse(

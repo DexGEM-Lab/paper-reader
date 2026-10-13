@@ -19,6 +19,7 @@ from src.paper_reader.netutils import (
     _SafeRedirectHandler,
     _read_bounded,
     fetch_public_url,
+    quote_url_path,
     validate_public_url,
 )
 from src.paper_reader.web_resources import classify_import_target, extract_web_content
@@ -124,6 +125,42 @@ class NetutilsTests(unittest.TestCase):
             )
 
         self.assertEqual(len(response.body), 26 * 1024 * 1024)
+
+    def test_non_ascii_paths_are_quoted_idempotently_before_fetching(self) -> None:
+        raw_url = "https://github.com/Rawmantic/Dataset3D高质量三维仿真数据集"
+        encoded_url = "https://github.com/Rawmantic/Dataset3D%E9%AB%98%E8%B4%A8%E9%87%8F%E4%B8%89%E7%BB%B4%E4%BB%BF%E7%9C%9F%E6%95%B0%E6%8D%AE%E9%9B%86"
+        self.assertEqual(quote_url_path(raw_url), encoded_url)
+        self.assertEqual(quote_url_path(encoded_url), encoded_url)
+
+        class Response:
+            status = 200
+            headers = {"Content-Type": "text/html"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):  # noqa: ANN002, ANN003
+                return None
+
+            def geturl(self) -> str:
+                return encoded_url
+
+            def read(self, size: int) -> bytes:
+                return b""
+
+        class Opener:
+            request_url = ""
+
+            def open(self, request, timeout):  # noqa: ANN001
+                self.request_url = request.full_url
+                return Response()
+
+        opener = Opener()
+        with patch("src.paper_reader.netutils.build_opener", return_value=opener):
+            response = fetch_public_url(raw_url, prefer_https=False, resolver=lambda *args, **kwargs: PUBLIC_DNS)
+
+        self.assertEqual(opener.request_url, encoded_url)
+        self.assertEqual(response.final_url, encoded_url)
 
 
 class WebClassificationTests(unittest.TestCase):
