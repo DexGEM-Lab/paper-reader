@@ -16,6 +16,12 @@ from urllib.parse import urlparse
 
 LOGGER = logging.getLogger(__name__)
 DEFAULT_FEISHU_API_BASE_URL = "https://open.feishu.cn"
+DEFAULT_LLM_BASE_URL = "https://litellm.dex-gem.ai/v1"
+DEFAULT_LLM_MODEL = "glm-5.3"
+DEFAULT_LLM_CHEAP_MODEL = "deepseek-flash"
+DEFAULT_LLM_ALLOWED_MODELS = frozenset(
+    {"claude-sonnet-5-5", "claude-sonnet-5", "kimi-k3", "glm-5.3", "deepseek-flash"}
+)
 
 
 def load_env_file_values(path: Path) -> dict[str, str]:
@@ -67,6 +73,26 @@ def _port_setting(value: str) -> int:
     return port
 
 
+def _positive_float_setting(value: str, *, name: str) -> float:
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a positive number.") from exc
+    if parsed <= 0:
+        raise ValueError(f"{name} must be a positive number.")
+    return parsed
+
+
+def _positive_int_setting(value: str, *, name: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a positive integer.") from exc
+    if parsed <= 0:
+        raise ValueError(f"{name} must be a positive integer.")
+    return parsed
+
+
 def _csv_setting(value: str) -> frozenset[str]:
     return frozenset(item.strip().casefold() for item in value.split(",") if item.strip())
 
@@ -90,6 +116,11 @@ class PaperReaderConfig:
     llm_base_url: str
     llm_api_key: str
     llm_model: str
+    llm_cheap_model: str
+    llm_allowed_models: frozenset[str]
+    llm_qps: float
+    llm_timeout: float
+    llm_context_tokens: int
 
     @property
     def feishu_enabled(self) -> bool:
@@ -144,8 +175,16 @@ def load_config(
         feishu_api_base_url=normalize_public_base_url(
             setting("PAPER_READER_FEISHU_API_BASE_URL", DEFAULT_FEISHU_API_BASE_URL)
         ),
-        # These are intentionally configuration-only until the LLM transport is migrated.
-        llm_base_url=setting("PAPER_READER_LLM_BASE_URL"),
+        llm_base_url=normalize_public_base_url(setting("PAPER_READER_LLM_BASE_URL", DEFAULT_LLM_BASE_URL)),
         llm_api_key=setting("PAPER_READER_LLM_API_KEY"),
-        llm_model=setting("PAPER_READER_LLM_MODEL"),
+        llm_model=setting("PAPER_READER_LLM_MODEL", DEFAULT_LLM_MODEL),
+        llm_cheap_model=setting("PAPER_READER_LLM_CHEAP_MODEL", DEFAULT_LLM_CHEAP_MODEL),
+        llm_allowed_models=_csv_setting(
+            setting("PAPER_READER_LLM_ALLOWED_MODELS", ",".join(sorted(DEFAULT_LLM_ALLOWED_MODELS)))
+        ),
+        llm_qps=_positive_float_setting(setting("PAPER_READER_LLM_QPS", "10"), name="PAPER_READER_LLM_QPS"),
+        llm_timeout=_positive_float_setting(setting("PAPER_READER_LLM_TIMEOUT", "120"), name="PAPER_READER_LLM_TIMEOUT"),
+        llm_context_tokens=_positive_int_setting(
+            setting("PAPER_READER_LLM_CONTEXT_TOKENS", "12000"), name="PAPER_READER_LLM_CONTEXT_TOKENS"
+        ),
     )
