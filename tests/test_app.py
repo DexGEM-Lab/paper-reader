@@ -75,7 +75,16 @@ class PaperReaderAppTests(unittest.TestCase):
         self.source_tempdir = tempfile.TemporaryDirectory()
         self.extra_apps = []
         self.env_file_path = self.library / ".test-no-env"
-        self.env_patch = patch.dict(os.environ, {"PAPER_READER_ENV_FILE": str(self.env_file_path)}, clear=False)
+        self.env_patch = patch.dict(
+            os.environ,
+            {
+                "PAPER_READER_ENV_FILE": str(self.env_file_path),
+                "PAPER_READER_SECRET_KEY": "test-session-secret",
+                "PAPER_READER_LOGIN_USERNAME": "admin",
+                "PAPER_READER_LOGIN_PASSWORD": "test-admin-password",
+            },
+            clear=False,
+        )
         self.env_patch.start()
         self.addCleanup(self.env_patch.stop)
         self.source_root = Path(self.source_tempdir.name)
@@ -166,8 +175,8 @@ class PaperReaderAppTests(unittest.TestCase):
             "\n".join(
                 [
                     "PAPER_READER_SECRET_KEY=test-feishu-secret",
-                    "PAPER_READER_BASE_URL=https://paper-reader.macaron.xin",
-                    "PAPER_READER_FEISHU_APP_ID=cli_a964a2e78db85cef",
+                    "PAPER_READER_BASE_URL=https://reader.example.test",
+                    "PAPER_READER_FEISHU_APP_ID=cli_test_paper_reader",
                     "PAPER_READER_FEISHU_APP_SECRET=test-feishu-app-secret",
                 ]
             )
@@ -531,7 +540,7 @@ class PaperReaderAppTests(unittest.TestCase):
             "/login",
             data={
                 "username": "admin",
-                "password": "paperpaperreaderreader12678",
+                "password": "test-admin-password",
                 "next": "/",
             },
             follow_redirects=False,
@@ -561,7 +570,7 @@ class PaperReaderAppTests(unittest.TestCase):
 
         blocked = client.post(
             "/login",
-            data={"username": "admin", "password": "paperpaperreaderreader12678", "next": "/"},
+            data={"username": "admin", "password": "test-admin-password", "next": "/"},
             follow_redirects=True,
         )
         self.assertIn("当前已锁定", blocked.get_data(as_text=True))
@@ -569,7 +578,7 @@ class PaperReaderAppTests(unittest.TestCase):
         timeline["value"] += 301
         success = client.post(
             "/login",
-            data={"username": "admin", "password": "paperpaperreaderreader12678", "next": "/"},
+            data={"username": "admin", "password": "test-admin-password", "next": "/"},
             follow_redirects=False,
         )
         self.assertEqual(success.status_code, 302)
@@ -582,7 +591,15 @@ class PaperReaderAppTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        with patch.dict(os.environ, {"PAPER_READER_ENV_FILE": str(env_file)}, clear=False):
+        with patch.dict(
+            os.environ,
+            {
+                "PAPER_READER_ENV_FILE": str(env_file),
+                "PAPER_READER_LOGIN_USERNAME": "reader",
+                "PAPER_READER_LOGIN_PASSWORD": "custom-secret-456",
+            },
+            clear=False,
+        ):
             app = create_app(self.library)
         app.testing = True
         client = app.test_client()
@@ -607,8 +624,8 @@ class PaperReaderAppTests(unittest.TestCase):
         query = parse_qs(parsed.query)
 
         self.assertEqual(f"{parsed.scheme}://{parsed.netloc}{parsed.path}", paper_reader_app_module.FEISHU_AUTH_PAGE_URL)
-        self.assertEqual(query["app_id"][0], "cli_a964a2e78db85cef")
-        self.assertEqual(query["redirect_uri"][0], "https://paper-reader.macaron.xin/auth/feishu/callback")
+        self.assertEqual(query["app_id"][0], "cli_test_paper_reader")
+        self.assertEqual(query["redirect_uri"][0], "https://reader.example.test/auth/feishu/callback")
         self.assertTrue(query["state"][0])
 
         with client.session_transaction() as session:
@@ -629,7 +646,7 @@ class PaperReaderAppTests(unittest.TestCase):
             headers = dict(request_obj.header_items())
             if url == paper_reader_app_module.FEISHU_APP_ACCESS_TOKEN_URL:
                 payload = json.loads((request_obj.data or b"{}").decode("utf-8"))
-                self.assertEqual(payload["app_id"], "cli_a964a2e78db85cef")
+                self.assertEqual(payload["app_id"], "cli_test_paper_reader")
                 return self.fake_markdown_response(
                     json.dumps({"code": 0, "msg": "ok", "app_access_token": "app-access-token"})
                 )
@@ -638,7 +655,7 @@ class PaperReaderAppTests(unittest.TestCase):
                 self.assertEqual(headers.get("Authorization"), "Bearer app-access-token")
                 self.assertEqual(payload["grant_type"], "authorization_code")
                 self.assertEqual(payload["code"], "code-123")
-                self.assertEqual(payload["app_id"], "cli_a964a2e78db85cef")
+                self.assertEqual(payload["app_id"], "cli_test_paper_reader")
                 return self.fake_markdown_response(
                     json.dumps({"code": 0, "msg": "ok", "data": {"access_token": "user-access-token"}})
                 )
@@ -651,7 +668,7 @@ class PaperReaderAppTests(unittest.TestCase):
                             "msg": "ok",
                             "data": {
                                 "open_id": "ou_test_feishu",
-                                "name": "Feishu Pony",
+                                "name": "Feishu Test User",
                             },
                         }
                     )
@@ -668,7 +685,7 @@ class PaperReaderAppTests(unittest.TestCase):
         user = app.team_store.get_user_by_username(username)
         self.assertIsNotNone(user)
         assert user is not None
-        self.assertEqual(user.display_name, "Feishu Pony")
+        self.assertEqual(user.display_name, "Feishu Test User")
         self.assertEqual(user.role, "member")
 
         with client.session_transaction() as session:
@@ -696,10 +713,10 @@ class PaperReaderAppTests(unittest.TestCase):
         assert user is not None
         self.assertEqual(user.role, "member")
 
-    def test_team_store_promotes_named_admins_on_startup(self) -> None:
-        self.app.team_store.create_user("pony", "Pony", "secret", "member")
-        refreshed = TeamStore(self.library)
-        user = refreshed.get_user_by_username("pony")
+    def test_team_store_promotes_configured_admins_on_startup(self) -> None:
+        self.app.team_store.create_user("configured-admin", "Configured Admin", "secret", "member")
+        refreshed = TeamStore(self.library, admin_usernames=("configured-admin",))
+        user = refreshed.get_user_by_username("configured-admin")
         self.assertIsNotNone(user)
         assert user is not None
         self.assertEqual(user.role, "admin")

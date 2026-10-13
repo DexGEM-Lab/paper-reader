@@ -14,7 +14,6 @@ from .arxiv_markdown import base_arxiv_id, normalize_arxiv_id
 
 
 DEFAULT_DB_NAME = ".paper-reader-team.db"
-DEFAULT_ADMIN_USERNAMES = ("admin", "pony", "qihan", "andrew")
 _AUTO_TAG_STOPWORDS = {
     "a",
     "an",
@@ -190,14 +189,21 @@ class TeamChatMessage:
 
 
 class TeamStore:
-    def __init__(self, root: Path, db_name: str = DEFAULT_DB_NAME):
+    def __init__(
+        self,
+        root: Path,
+        db_name: str = DEFAULT_DB_NAME,
+        *,
+        admin_usernames: Iterable[str] = (),
+    ):
         self.root = root.resolve()
         self.root.mkdir(parents=True, exist_ok=True)
         self.db_path = self.root / db_name
+        self.admin_usernames = frozenset(item.strip().casefold() for item in admin_usernames if item and item.strip())
         self._write_lock = threading.Lock()
         self._ensure_schema()
         self._migrate_likes_into_recommendations()
-        self._ensure_named_admins(DEFAULT_ADMIN_USERNAMES)
+        self._ensure_configured_admins()
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path, timeout=30, check_same_thread=False)
@@ -500,9 +506,9 @@ class TeamStore:
             avatar_rel_path=(str(user["avatar_rel_path"]) if user["avatar_rel_path"] else None),
         )
 
-    def _ensure_named_admins(self, usernames: tuple[str, ...]) -> None:
-        normalized = {item.strip().lower() for item in usernames if item and item.strip()}
-        if not normalized:
+    def _ensure_configured_admins(self) -> None:
+        """Apply only the deployment's explicit admin allow-list to existing users."""
+        if not self.admin_usernames:
             return
         now = self._timestamp()
         with self._write_lock:
@@ -513,8 +519,8 @@ class TeamStore:
                     SELECT u.id, u.username
                     FROM users u
                     WHERE lower(u.username) IN ({placeholders})
-                    """.format(placeholders=", ".join("?" for _ in normalized)),
-                    tuple(sorted(normalized)),
+                    """.format(placeholders=", ".join("?" for _ in self.admin_usernames)),
+                    tuple(sorted(self.admin_usernames)),
                 ).fetchall()
                 for row in rows:
                     conn.execute(
@@ -640,6 +646,8 @@ class TeamStore:
             with self._connect() as conn:
                 if conn.execute("SELECT 1 FROM users WHERE username = ?", (username,)).fetchone() is not None:
                     raise ValueError("用户名已存在。")
+                user_count = int(conn.execute("SELECT COUNT(*) FROM users").fetchone()[0])
+                assigned_role = "admin" if user_count == 0 or username.casefold() in self.admin_usernames else role_slug
                 cursor = conn.execute(
                     """
                     INSERT INTO users(username, display_name, password_hash, is_active, created_at, updated_at)
@@ -647,7 +655,7 @@ class TeamStore:
                     """,
                     (username, display_name, generate_password_hash(password), now, now),
                 )
-                role_id = int(conn.execute("SELECT id FROM roles WHERE slug = ?", (role_slug,)).fetchone()[0])
+                role_id = int(conn.execute("SELECT id FROM roles WHERE slug = ?", (assigned_role,)).fetchone()[0])
                 created_user_id = cursor.lastrowid
                 if created_user_id is None:
                     raise RuntimeError("Failed to persist user.")
