@@ -4,12 +4,13 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}Paper Reader{% endblock %}</title>
-    <link rel="icon" href="{{ url_for('static', filename='logo-mark.svg') }}" type="image/svg+xml">
-    <link rel="shortcut icon" href="{{ url_for('static', filename='logo-mark.svg') }}">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700;800&family=Noto+Serif+SC:wght@500;600;700&display=swap" rel="stylesheet">
+    <link rel="icon" href="{{ url_for('static', filename='brand/favicon-32.png') }}" type="image/png" sizes="32x32">
+    <link rel="shortcut icon" href="{{ url_for('static', filename='brand/favicon-32.png') }}" type="image/png">
+    <link rel="apple-touch-icon" href="{{ url_for('static', filename='brand/favicon-180.png') }}" sizes="180x180">
+    <link rel="icon" href="{{ url_for('static', filename='brand/favicon-192.png') }}" type="image/png" sizes="192x192">
+    <link rel="stylesheet" href="{{ url_for('static', filename='tokens.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
     <script>
       window.MathJax = {
         tex: {
@@ -29,9 +30,9 @@
     <div class="page-shell">
       <header class="hero hero-compact">
         <div class="hero-brand">
-          <img class="app-logo" src="{{ url_for('static', filename='logo-mark.svg') }}" alt="Paper Reader logo">
+          <img class="app-logo" src="{{ url_for('static', filename='brand/dexgem-wordmark.svg') }}" alt="DexGEM" width="132">
           <div>
-            <p class="eyebrow">Paper Reader</p>
+            <p class="eyebrow">Research Reader</p>
             {% if session.get("user_id") %}<h1><a href="{{ url_for('index') }}">论文阅读器</a></h1>{% else %}<h1>论文阅读器</h1>{% endif %}
           </div>
         </div>

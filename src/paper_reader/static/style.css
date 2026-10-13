@@ -3448,7 +3448,7 @@ button:disabled,
   box-shadow: none;
 }
 body.settings-open .settings-orb:not(.dragging) {
-  transform: none;
+  transform: rotate(8deg) scale(0.96);
   z-index: 54;
 }
 .settings-drawer {

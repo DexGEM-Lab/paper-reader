@@ -4674,8 +4674,18 @@ def create_app(
             archive.writestr("index.html", html.encode("utf-8"))
             archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8"))
             archive.writestr("assets/style.css", (static_root / "style.css").read_bytes())
+            archive.writestr("assets/tokens.css", (static_root / "tokens.css").read_bytes())
+            archive.writestr("assets/app.css", (static_root / "app.css").read_bytes())
             archive.writestr("assets/offline-reader.css", (static_root / "offline-reader.css").read_bytes())
             archive.writestr("assets/offline-reader.js", (static_root / "offline-reader.js").read_bytes())
+            for font_name in (
+                "Inter-400.woff2",
+                "Inter-600.woff2",
+                "Inter-700.woff2",
+                "SpaceGrotesk-500.woff2",
+                "SpaceGrotesk-700.woff2",
+            ):
+                archive.writestr(f"assets/fonts/{font_name}", (static_root / "fonts" / font_name).read_bytes())
             archive.writestr(
                 "assets/vendor/mathjax/tex-svg.js",
                 (static_root / "vendor" / "mathjax" / "tex-svg.js").read_bytes(),
