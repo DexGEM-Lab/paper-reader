@@ -1,10 +1,10 @@
 # paper-reader
 
-一个面向本地论文库的轻量阅读器，支持 PDF / Word 文档管理、浏览器内阅读、Prompt 批量分析、离线阅读包导出、外部论文来源归档，以及后台任务处理。
+一个面向团队研究资料库的轻量阅读器，统一管理论文、arXiv、OpenReview、项目网站、技术博客和新闻文章，并支持浏览器内阅读、Prompt 分析、协作与后台任务处理。
 
 ## 主要功能
 
-- 本地论文库：自动扫描 `PDF / .doc / .docx`
+- 统一资料库：自动扫描 `PDF / .doc / .docx`，并将网页正文保存为带元数据的 Markdown 快照
 - 左侧紧凑论文列表，右侧大阅读区
 - PDF 在线阅读、`.docx` 文本预览、`.doc` 原文件打开
 - Prompt 管理：可配置多个 Prompt，结果落盘为本地 Markdown
@@ -28,6 +28,7 @@
 - `PAPER_READER_DATA_DIR=./data`
 - `PAPER_READER_LIBRARY_DIR=./data/library`
 - `PAPER_READER_SOURCES_ARCHIVE_DIR=./data/sources/huggingface_daily`
+- `PAPER_READER_MAX_UPLOAD_BYTES=104857600`（默认 100 MiB）
 
 `PAPER_READER_LIBRARY_DIR` 和 `PAPER_READER_SOURCES_ARCHIVE_DIR` 覆盖各自目录；未设置时从 `PAPER_READER_DATA_DIR` 派生。主论文库、SQLite 协作数据、Prompt 结果和 Sources 归档都在这些目录中，不随 Git 提交。
 
@@ -84,7 +85,24 @@ PAPER_READER_LLM_TIMEOUT=120
 PAPER_READER_LLM_CONTEXT_TOKENS=12000
 ```
 
-默认 base URL、模型、限速和超时如上。未知的 SQLite Prompt 模型会记录警告并回退到 `PAPER_READER_LLM_MODEL`。HTTP 聊天使用网关 SSE 增量响应，并为每次浏览器流式会话发送 `x-litellm-session-id`。文档请求先抽取 PDF/DOCX 文本；有 arXiv Markdown 缓存时优先使用缓存；超过上下文预算时保留开头和结尾，省略中间正文。
+默认 base URL、模型、限速和超时如上。未知的 SQLite Prompt 模型会记录警告并回退到 `PAPER_READER_LLM_MODEL`。HTTP 聊天使用网关 SSE 增量响应，并为每次浏览器流式会话发送 `x-litellm-session-id`。文档请求先抽取 PDF/DOCX/Markdown 文本；有 arXiv Markdown 缓存时优先使用缓存；超过上下文预算时保留开头和结尾，省略中间正文。
+
+### 批量导入飞书历史链接
+
+`scripts/import_links.py` 读取每行一个对象的 JSONL：
+
+```json
+{"url":"https://example.org/post","chat_name":"DexGEM Research","msg_time_iso":"2026-01-02T03:04:05Z","context_text":"推荐阅读","sender_open_id":"ou_xxx"}
+```
+
+先做无副作用的分类检查，再执行导入：
+
+```bash
+.venv/bin/python scripts/import_links.py links.jsonl --dry-run
+.venv/bin/python scripts/import_links.py links.jsonl --as-user admin
+```
+
+脚本直接使用与 Web UI 相同的 action queue、资料库和 SQLite store。默认 resume 行为会跳过已有 canonical URL；加 `--no-resume` 可刷新现有网页快照。每条飞书出处以 `source_type=feishu` 保存 chat name、消息上下文、发送者 open ID 和时间。
 
 ## 环境准备
 

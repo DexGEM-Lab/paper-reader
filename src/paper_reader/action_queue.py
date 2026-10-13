@@ -274,6 +274,11 @@ class ActionTaskQueue:
             error="Interrupted",
         )
 
+    def get(self, action_id: str) -> ActionRecord | None:
+        with self._lock:
+            action = self._actions.get(action_id)
+            return ActionRecord(**asdict(action)) if action is not None else None
+
     def snapshot(self, *, kind: str | None = None, limit: int = 24) -> dict[str, Any]:
         with self._lock:
             all_actions = list(self._actions.values())
