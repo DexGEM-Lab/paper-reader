@@ -854,6 +854,8 @@ label span {
   line-height: 1.7;
   color: var(--ink);
   max-width: 760px;
+  border: 0;
+  background: var(--paper);
 }
 
 .markdown-viewer h1,
@@ -960,20 +962,35 @@ label span {
 }
 
 .team-chat-message.role-user {
+  background: transparent;
   border-left-color: var(--ink);
 }
 
 .team-chat-message.role-assistant {
+  background: transparent;
   border-left-color: var(--sapphire);
 }
 
 .team-chat-message.status-pending,
 .team-chat-message.status-streaming {
+  background: transparent;
+  border-color: var(--hairline);
   border-left: 2px dashed var(--ink-30);
+  box-shadow: none;
 }
 
 .team-chat-message.status-failed {
+  background: transparent;
+  border-color: var(--hairline);
   border-left-color: var(--red);
+}
+
+/* Quiet avatars: paper chip with ink border, not a sapphire square */
+.avatar {
+  background: var(--paper);
+  border: 1px solid var(--ink);
+  color: var(--ink);
+  box-shadow: none;
 }
 
 .team-chat-message.status-failed .chat-message-copy strong,
