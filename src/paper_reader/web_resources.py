@@ -33,7 +33,6 @@ _IMAGE_CONTENT_TYPES = {
     "image/gif": ".gif",
     "image/jpeg": ".jpg",
     "image/png": ".png",
-    "image/svg+xml": ".svg",
     "image/webp": ".webp",
 }
 _ATTACHMENT_KINDS = frozenset({"paper-pdf", "supplementary", "demo-video", "dataset"})
@@ -696,7 +695,7 @@ class WebResourceStore:
             try:
                 response = fetch_public_url(
                     source_url,
-                    accept="image/avif,image/webp,image/png,image/jpeg,image/gif,image/svg+xml;q=0.8,*/*;q=0.1",
+                    accept="image/avif,image/webp,image/png,image/jpeg,image/gif,*/*;q=0.1",
                     max_bytes=MAX_IMAGE_BYTES,
                     max_redirects=self.max_redirects,
                 )
@@ -821,8 +820,12 @@ class WebResourceStore:
             is_pdf = parsed.path.casefold().endswith(".pdf") or selection.kind == "paper-pdf"
             if is_pdf:
                 try:
+                    download_url = selection.source_url
+                    if selection.kind == "paper-pdf":
+                        classified = classify_import_target(selection.source_url)
+                        download_url = classified.download_url or selection.source_url
                     response = fetch_public_url(
-                        selection.source_url,
+                        download_url,
                         accept="application/pdf,*/*;q=0.1",
                         max_bytes=self.document_max_bytes,
                         max_redirects=self.max_redirects,

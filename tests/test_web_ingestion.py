@@ -266,6 +266,36 @@ class RichContentTests(unittest.TestCase):
         self.assertEqual(len(selected), 3)
         self.assertEqual([item.title for item in selected], ["Selected 0", "Selected 1", "Selected 2"])
 
+    def test_attachment_discovery_downloads_at_most_three_pdfs(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            links = "".join(f'<a href="/paper-{index}.pdf">Paper PDF {index}</a>' for index in range(5))
+            page = (
+                '<html><head><title>Attachment project</title></head><body><article>'
+                '<p>This research project explains the method, experiments, evaluation, and concrete results.</p>'
+                f'{links}</article></body></html>'
+            ).encode()
+            store = WebResourceStore(root)
+            with patch("src.paper_reader.web_resources.fetch_public_url", return_value=fetched(page, url="https://example.com/project")):
+                snapshot = store.fetch_and_store(classify_import_target("https://example.com/project"))
+
+            class Client:
+                def complete(self, messages, *, model, session_id=None):  # noqa: ANN001
+                    return json.dumps([
+                        {"id": index, "kind": "paper-pdf", "title": f"Paper {index}"}
+                        for index in range(5)
+                    ])
+
+            def fetch_pdf(url: str, **kwargs):  # noqa: ANN003
+                return fetched(b"%PDF-1.7 test", url=url, content_type="application/pdf")
+
+            with patch("src.paper_reader.web_resources.fetch_public_url", side_effect=fetch_pdf):
+                attachments = store.discover_attachments(snapshot.rel_path, client=Client(), model="cheap")
+
+            self.assertEqual(len(attachments), 3)
+            self.assertTrue(all(item.local_path and (root / item.local_path).exists() for item in attachments))
+            self.assertTrue(store.is_enriched(snapshot.rel_path))
+
 
 class WebImportIntegrationTests(unittest.TestCase):
     def setUp(self) -> None:
