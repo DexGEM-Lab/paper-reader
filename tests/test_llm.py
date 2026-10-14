@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import io
 import json
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 from urllib.error import HTTPError
 
+from src.paper_reader.ai_summary import extract_document_context
 from src.paper_reader.config import load_config
 from src.paper_reader.llm import LLMClient, LLMHTTPError, RequestRateLimiter, resolve_model
 
@@ -94,6 +97,21 @@ class LiteLLMClientTests(unittest.TestCase):
         with self.assertLogs("src.paper_reader.llm", level="WARNING"):
             self.assertEqual(resolve_model("untrusted-model", config), "glm-5.3")
         self.assertEqual(resolve_model("deepseek-flash", config), "deepseek-flash")
+
+    def test_attachment_text_shares_the_single_context_budget(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            main = root / "main.md"
+            attachment = root / "attachment.md"
+            main.write_text("Main evidence " * 20, encoding="utf-8")
+            attachment.write_text("Attachment evidence " * 20, encoding="utf-8")
+
+            _, text, note = extract_document_context(main, attachment_paths=[attachment], max_chars=180)
+
+        self.assertLessEqual(len(text), 180 + len("\n\n[... 为控制上下文长度，已省略中间正文 ...]\n\n"))
+        self.assertIn("Main evidence", text)
+        self.assertIn("Attachment evidence", text)
+        self.assertIn("附件文本", note)
 
     def test_does_not_retry_client_errors(self) -> None:
         rejected = HTTPError(

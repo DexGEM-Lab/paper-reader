@@ -26,6 +26,7 @@ from src.paper_reader.netutils import (
 )
 from src.paper_reader.web_resources import (
     MAX_ASSETS_PER_ITEM,
+    DiscoveredAttachment,
     WebResourceStore,
     classify_import_target,
     extract_web_content,
@@ -403,6 +404,30 @@ class WebImportIntegrationTests(unittest.TestCase):
         self.assertIn("Open original", html)
         self.assertIn("Research systems in practice", html)
         self.assertIn("Useful systems paper", html)
+
+    def test_reader_lists_locally_persisted_attachments(self) -> None:
+        result = self.run_import("https://example.com/research/attachments")
+        rel_path = result["items"][0]["rel_path"]
+        attachment_path = self.library / "Web" / "example-com" / "attachments" / "supplement.pdf"
+        attachment_path.parent.mkdir(parents=True, exist_ok=True)
+        attachment_path.write_bytes(b"%PDF-1.7 test")
+        attachment_rel_path = attachment_path.relative_to(self.library).as_posix()
+        self.app.team_store.replace_attachments(
+            rel_path,
+            [
+                DiscoveredAttachment(
+                    kind="supplementary",
+                    title="Supplementary experiments",
+                    source_url="https://example.com/supplement.pdf",
+                    local_path=attachment_rel_path,
+                )
+            ],
+        )
+
+        html = self.client.get(f"/?paper={rel_path}&tab=source").get_data(as_text=True)
+        self.assertIn("附件", html)
+        self.assertIn("Supplementary experiments", html)
+        self.assertIn(f"/files/{attachment_rel_path}", html)
 
     def test_reimport_refreshes_same_canonical_item_instead_of_duplicating(self) -> None:
         url = "https://example.com/research/system"
