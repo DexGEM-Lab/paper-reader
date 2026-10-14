@@ -2528,3 +2528,9 @@ table {
     padding: 24px 16px 96px;
   }
 }
+
+/* Media frame: the document surface gets the Ink 1px frame */
+.source-viewer .main-viewer {
+  border: var(--border-strong);
+  background: var(--paper);
+}
