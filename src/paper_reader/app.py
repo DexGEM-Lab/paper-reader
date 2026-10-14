@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 import json
 import logging
+import os
 import queue
 import re
 import secrets
@@ -43,6 +44,7 @@ from .chat_ai import stream_answer_question_about_document
 from .chat_queue import PaperChatQueue
 from .config import PaperReaderConfig, load_config, load_env_file_values, normalize_public_base_url
 from .document_utils import ALLOWED_EXTENSIONS, LIBRARY_EXTENSIONS, extract_document_metadata
+from .discovery import DailyDiscoveryScheduler, DiscoveryService
 from .insights_history import HistoricalInsightsStore, extract_digest
 from .llm import get_llm_client, resolve_model
 from .insights_momentum import MomentumInsightsStore
@@ -2139,6 +2141,8 @@ def create_app(
     app.config["LLM_QPS"] = runtime_config.llm_qps
     app.config["LLM_TIMEOUT"] = runtime_config.llm_timeout
     app.config["SCREEN_IMPORTS"] = runtime_config.screen_imports
+    app.config["DISCOVERY_ENABLED"] = runtime_config.discovery_enabled
+    app.config["DISCOVERY_HOUR"] = runtime_config.discovery_hour
     app.config["MAX_CONTENT_LENGTH"] = runtime_config.max_upload_bytes
     app.config["SESSION_COOKIE_HTTPONLY"] = True
     app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
@@ -2167,6 +2171,14 @@ def create_app(
         max_concurrency=app.settings_store.max_concurrency(),  # type: ignore[attr-defined]
     )
     app.action_queue = ActionTaskQueue(app.config["LIBRARY_ROOT"])  # type: ignore[attr-defined]
+    app.discovery_service = DiscoveryService(  # type: ignore[attr-defined]
+        store=app.team_store,
+        config=runtime_config,
+    )
+    app.discovery_scheduler = DailyDiscoveryScheduler(  # type: ignore[attr-defined]
+        app.discovery_service,
+        hour=runtime_config.discovery_hour,
+    )
 
     def clear_user_session() -> None:
         for key in ("authenticated", "user_id", "username", "display_name", "role"):
@@ -3431,6 +3443,10 @@ def create_app(
     app.action_queue.register_handler("ai-tags", perform_ai_tag_action)  # type: ignore[attr-defined]
     app.action_queue.register_handler("upload-import", perform_upload_import_action)  # type: ignore[attr-defined]
     app.action_queue.start()  # type: ignore[attr-defined]
+    # pytest creates many short-lived application objects. Keep the production default
+    # enabled while avoiding daemon schedulers in test processes.
+    if runtime_config.discovery_enabled and not os.environ.get("PYTEST_CURRENT_TEST"):
+        app.discovery_scheduler.start()  # type: ignore[attr-defined]
 
 
     def import_remote_paper(target: str, recommendation_reason: str) -> dict[str, Any]:
@@ -4801,7 +4817,62 @@ def create_app(
 
     @app.get("/discover")
     def discover_index() -> Any:
-        return render_template("discover.html")
+        profile = app.discovery_service.interest_profile()  # type: ignore[attr-defined]
+        return render_template(
+            "discover.html",
+            discoveries=app.team_store.list_discoveries(),  # type: ignore[attr-defined]
+            interest_profile=profile,
+        )
+
+    @app.post("/discover/refresh")
+    def discover_refresh_route() -> Any:
+        if require_admin_user() is None:
+            return redirect(url_for("discover_index"))
+        try:
+            result = app.discovery_service.run()  # type: ignore[attr-defined]
+            flash(f"发现流已刷新：抓取 {result.fetched} 篇，筛出 {result.surfaced} 篇新候选。", "success")
+        except Exception as exc:
+            LOGGER.exception("Manual discovery refresh failed")
+            flash(f"发现流刷新失败：{exc}", "error")
+        return redirect(url_for("discover_index"))
+
+    @app.post("/discover/<int:discovery_id>/import")
+    def discover_import_route(discovery_id: int) -> Any:
+        actor = current_user()
+        if actor is None:
+            flash("请先登录。", "error")
+            return redirect(url_for("discover_index"))
+        candidate = app.team_store.get_discovery(discovery_id)  # type: ignore[attr-defined]
+        if candidate is None:
+            abort(404)
+        if candidate.status != "new":
+            flash("这条发现已经处理过了。", "error")
+            return redirect(url_for("discover_index"))
+        try:
+            task = submit_remote_import_action(candidate.url, f"发现推荐：{candidate.reason}", actor)
+            app.team_store.decide_discovery(discovery_id, status="imported", decided_by=actor.id)  # type: ignore[attr-defined]
+            flash(f"已加入导入队列：{task.title}", "success")
+        except (KeyError, ValueError) as exc:
+            flash(str(exc), "error")
+        except Exception as exc:
+            LOGGER.exception("Discovery import failed to enqueue")
+            flash(f"导入没成功：{exc}", "error")
+        return redirect(url_for("discover_index"))
+
+    @app.post("/discover/<int:discovery_id>/dismiss")
+    def discover_dismiss_route(discovery_id: int) -> Any:
+        actor = current_user()
+        if actor is None:
+            flash("请先登录。", "error")
+            return redirect(url_for("discover_index"))
+        try:
+            app.team_store.decide_discovery(discovery_id, status="dismissed", decided_by=actor.id)  # type: ignore[attr-defined]
+            flash("已忽略这条发现。", "success")
+        except KeyError:
+            abort(404)
+        except ValueError as exc:
+            flash(str(exc), "error")
+        return redirect(url_for("discover_index"))
 
     @app.get("/sources")
     def sources_index() -> Any:
