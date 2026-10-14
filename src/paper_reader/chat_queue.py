@@ -91,6 +91,7 @@ class PaperChatQueue:
                 history=job.history,
                 prompt_contexts=prompt_contexts,
                 arxiv_markdown_path=(arxiv_markdown.markdown_path if arxiv_markdown is not None else None),
+                attachment_paths=self.team_store.attachment_paths_for_rel_path(job.rel_path),
                 model=job.model,
             )
             self.team_store.update_chat_message(

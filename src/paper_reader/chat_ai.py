@@ -53,6 +53,7 @@ def build_chat_prompt(
     history: Sequence[dict[str, str]],
     prompt_contexts: Sequence[tuple[str, str]],
     arxiv_markdown_path: Path | None = None,
+    attachment_paths: Sequence[Path] = (),
 ) -> str:
     mode = "Shared Chat" if visibility == "shared" else "Private Chat"
     collaboration_hint = (
@@ -63,6 +64,7 @@ def build_chat_prompt(
     title, document_text, extraction_note = extract_document_context(
         document_path,
         source_markdown_path=arxiv_markdown_path,
+        attachment_paths=attachment_paths,
         max_chars=load_config().llm_context_tokens,
     )
     return (
@@ -103,6 +105,7 @@ def _chat_request(
     history: Sequence[dict[str, str]],
     prompt_contexts: Sequence[tuple[str, str]],
     arxiv_markdown_path: Path | None,
+    attachment_paths: Sequence[Path],
     model: str | None,
 ) -> tuple[str, str]:
     document_path = document_path.resolve()
@@ -117,6 +120,7 @@ def _chat_request(
         history=history,
         prompt_contexts=prompt_contexts,
         arxiv_markdown_path=arxiv_markdown_path,
+        attachment_paths=attachment_paths,
     )
     config = load_config()
     return prompt, resolve_model(model, config)
@@ -130,6 +134,7 @@ def answer_question_about_document(
     history: Sequence[dict[str, str]],
     prompt_contexts: Sequence[tuple[str, str]],
     arxiv_markdown_path: Path | None = None,
+    attachment_paths: Sequence[Path] = (),
     model: str | None = None,
     session_id: str | None = None,
 ) -> str:
@@ -140,6 +145,7 @@ def answer_question_about_document(
         history=history,
         prompt_contexts=prompt_contexts,
         arxiv_markdown_path=arxiv_markdown_path,
+        attachment_paths=attachment_paths,
         model=model,
     )
     return get_llm_client().complete(
@@ -155,6 +161,7 @@ def stream_answer_question_about_document(
     history: Sequence[dict[str, str]],
     prompt_contexts: Sequence[tuple[str, str]],
     arxiv_markdown_path: Path | None = None,
+    attachment_paths: Sequence[Path] = (),
     model: str | None = None,
     session_id: str | None = None,
 ) -> Iterator[str]:
@@ -165,6 +172,7 @@ def stream_answer_question_about_document(
         history=history,
         prompt_contexts=prompt_contexts,
         arxiv_markdown_path=arxiv_markdown_path,
+        attachment_paths=attachment_paths,
         model=model,
     )
     yield from get_llm_client().stream(

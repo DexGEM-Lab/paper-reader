@@ -44,13 +44,14 @@ from .chat_queue import PaperChatQueue
 from .config import PaperReaderConfig, load_config, load_env_file_values, normalize_public_base_url
 from .document_utils import ALLOWED_EXTENSIONS, LIBRARY_EXTENSIONS, extract_document_metadata
 from .insights_history import HistoricalInsightsStore, extract_digest
-from .llm import resolve_model
+from .llm import get_llm_client, resolve_model
 from .insights_momentum import MomentumInsightsStore
 from .insights_opportunity import OpportunityInsightsStore
 from .markdown_render import render_markdown
 from .netutils import fetch_public_url
 from .offline_package import build_offline_manifest, manifest_json as build_manifest_json, offline_prompt_arcname, offline_source_arcname
 from .prompt_manager import DEFAULT_PROMPT_SLUG, PromptDefinition, PromptStore, parse_checkbox
+from .screening import ScreeningPacket, screen_packets
 from .settings import SettingsStore
 from .source_archive import day_paper_map, load_source_day, load_source_days, local_pdf_path_for
 from .task_queue import PaperJobQueue
@@ -415,6 +416,7 @@ class PaperLibrary:
         team_store: Any | None = None,
         *,
         page_fetch_max_bytes: int = 25 * 1024 * 1024,
+        document_fetch_max_bytes: int = 100 * 1024 * 1024,
         fetch_max_redirects: int = 10,
     ):
         self.root = root.resolve()
@@ -429,6 +431,7 @@ class PaperLibrary:
         self.web_resources = WebResourceStore(
             self.root,
             fetch_max_bytes=page_fetch_max_bytes,
+            document_max_bytes=document_fetch_max_bytes,
             max_redirects=fetch_max_redirects,
         )
         self.prompt_store = prompt_store
@@ -1552,6 +1555,7 @@ class PaperLibrary:
             user_prompt=tag_prompt.user_prompt,
             model=load_config().llm_cheap_model,
             source_markdown_path=(arxiv_markdown.markdown_path if arxiv_markdown is not None else None),
+            attachment_paths=(self.team_store.attachment_paths_for_rel_path(rel_path) if self.team_store is not None else []),
             progress_callback=progress_callback,
             should_abort=should_abort,
         )
@@ -1621,6 +1625,7 @@ class PaperLibrary:
             user_prompt=effective_prompt.user_prompt,
             model=effective_prompt.model,
             source_markdown_path=(arxiv_markdown.markdown_path if arxiv_markdown is not None else None),
+            attachment_paths=(self.team_store.attachment_paths_for_rel_path(rel_path) if self.team_store is not None else []),
             progress_callback=progress_callback,
             should_abort=should_abort,
         )
@@ -2131,6 +2136,7 @@ def create_app(
     app.config["LLM_ALLOWED_MODELS"] = runtime_config.llm_allowed_models
     app.config["LLM_QPS"] = runtime_config.llm_qps
     app.config["LLM_TIMEOUT"] = runtime_config.llm_timeout
+    app.config["SCREEN_IMPORTS"] = runtime_config.screen_imports
     app.config["MAX_CONTENT_LENGTH"] = runtime_config.max_upload_bytes
     app.config["SESSION_COOKIE_HTTPONLY"] = True
     app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
@@ -2146,6 +2152,7 @@ def create_app(
         app.prompt_store,
         app.team_store,
         page_fetch_max_bytes=runtime_config.fetch_page_max_bytes,
+        document_fetch_max_bytes=runtime_config.fetch_max_bytes,
         fetch_max_redirects=runtime_config.fetch_max_redirects,
     )
     app.login_guard = LoginGuard()  # type: ignore[attr-defined]
@@ -4404,6 +4411,7 @@ def create_app(
                         history=history,
                         prompt_contexts=prompt_contexts,
                         arxiv_markdown_path=(arxiv_markdown.markdown_path if arxiv_markdown is not None else None),
+                        attachment_paths=app.team_store.attachment_paths_for_rel_path(rel_path),  # type: ignore[attr-defined]
                         model=runtime_config.llm_model,
                         session_id=f"paper-reader-chat-{assistant_message_id}",
                     ):

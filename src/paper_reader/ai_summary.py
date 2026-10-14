@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Callable
 
@@ -72,6 +73,7 @@ def extract_document_context(
     document_path: Path,
     *,
     source_markdown_path: Path | None = None,
+    attachment_paths: Sequence[Path] = (),
     max_chars: int | None = None,
 ) -> tuple[str, str, str]:
     """Extract the actual text that an HTTP-only model needs to ground a response."""
@@ -100,6 +102,19 @@ def extract_document_context(
             text = str(metadata.get("preview_text") or "").strip()
             note = "系统提取全文时遇到问题；回答仅能依据以下可用文本，并需说明信息可能不完整。"
 
+    attachment_blocks: list[str] = []
+    for attachment_path in list(attachment_paths)[:3]:
+        try:
+            resolved_attachment = attachment_path.resolve()
+            attachment_text = extract_document_text(resolved_attachment).strip()
+        except Exception:
+            continue
+        if attachment_text:
+            attachment_blocks.append(f"## 附件：{resolved_attachment.stem}\n\n{attachment_text}")
+    if attachment_blocks:
+        text = "\n\n".join([f"## 主文档\n\n{text}", *attachment_blocks])
+        note += " 同时附上了系统提取的附件文本。"
+
     budget = max_chars if max_chars is not None else load_config().llm_context_tokens
     text = truncate_context(text, max_chars=budget) if text else ""
     if not text:
@@ -112,10 +127,14 @@ def _document_prompt(
     *,
     user_prompt: str,
     source_markdown_path: Path | None,
+    attachment_paths: Sequence[Path],
     max_chars: int,
 ) -> str:
     title, text, note = extract_document_context(
-        document_path, source_markdown_path=source_markdown_path, max_chars=max_chars
+        document_path,
+        source_markdown_path=source_markdown_path,
+        attachment_paths=attachment_paths,
+        max_chars=max_chars,
     )
     rendered = render_user_prompt(user_prompt, document_path, source_markdown_path=source_markdown_path)
     return f"{rendered}\n\n## 文档标题\n{title}\n\n## 文档上下文\n{note}\n\n{text}"
@@ -154,6 +173,7 @@ def run_prompt_on_document(
     user_prompt: str,
     model: str | None = None,
     source_markdown_path: Path | None = None,
+    attachment_paths: Sequence[Path] = (),
     progress_callback: ProgressCallback | None = None,
     should_abort: AbortCallback | None = None,
     session_id: str | None = None,
@@ -168,6 +188,7 @@ def run_prompt_on_document(
         document_path,
         user_prompt=user_prompt,
         source_markdown_path=source_markdown_path,
+        attachment_paths=attachment_paths,
         max_chars=config.llm_context_tokens,
     )
     return run_text_prompt(

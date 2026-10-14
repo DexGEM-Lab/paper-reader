@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Iterable, Protocol
 
 SCREENABLE_KINDS = frozenset({"paper", "article", "project", "news"})
-_DECISIONS = frozenset({"keep", "drop"})
+_DECISIONS = frozenset({"keep", "drop", "borderline"})
 _FENCED_JSON = re.compile(r"```(?:json)?\s*(.*?)```", re.IGNORECASE | re.DOTALL)
 
 
@@ -167,7 +167,7 @@ def _screening_messages(batch: list[ScreeningPacket]) -> list[dict[str, str]]:
                 "marketing/pricing/referral/e-commerce pages, internal infrastructure, meetings/forms, "
                 "bare homepages, and unextractable material with no archival value. "
                 "Output only a JSON array, one object for every input: "
-                '{"url":"...","decision":"keep|drop","reason":"short concrete reason",'
+                '{"url":"...","decision":"keep|drop|borderline","reason":"short concrete reason",'
                 '"corrected_kind":"paper|article|project|news|null"}. '
                 "Use the supplied URL exactly."
             ),
@@ -211,7 +211,7 @@ def _parse_batch(raw: str, batch: list[ScreeningPacket]) -> list[ScreeningDecisi
         raw_kind = clean_text(raw_item.get("corrected_kind"), limit=40).casefold()
         corrected_kind = raw_kind if raw_kind in SCREENABLE_KINDS else None
         if decision not in _DECISIONS:
-            results.append(_error_decision(packet, "LLM decision must be keep or drop"))
+            results.append(_error_decision(packet, "LLM decision must be keep, drop, or borderline"))
         elif not reason:
             results.append(_error_decision(packet, "LLM decision omitted a reason"))
         else:

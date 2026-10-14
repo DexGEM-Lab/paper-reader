@@ -188,6 +188,16 @@ class TeamChatMessage:
     model: str | None
 
 
+@dataclass(slots=True)
+class PaperAttachment:
+    id: int
+    kind: str
+    title: str
+    local_path: str | None
+    source_url: str
+    created_at: str
+
+
 class TeamStore:
     def __init__(
         self,
@@ -282,6 +292,18 @@ class TeamStore:
                     created_at TEXT NOT NULL,
                     FOREIGN KEY (paper_id) REFERENCES papers(id) ON DELETE CASCADE,
                     FOREIGN KEY (imported_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS paper_attachments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    paper_id INTEGER NOT NULL,
+                    kind TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    local_path TEXT,
+                    source_url TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE (paper_id, source_url),
+                    FOREIGN KEY (paper_id) REFERENCES papers(id) ON DELETE CASCADE
                 );
 
                 CREATE TABLE IF NOT EXISTS paper_recommendations (
@@ -414,6 +436,7 @@ class TeamStore:
                 CREATE INDEX IF NOT EXISTS idx_papers_display_title ON papers(display_title);
                 CREATE INDEX IF NOT EXISTS idx_papers_folder ON papers(folder);
                 CREATE INDEX IF NOT EXISTS idx_paper_recommendations_paper_id ON paper_recommendations(paper_id);
+                CREATE INDEX IF NOT EXISTS idx_paper_attachments_paper_id ON paper_attachments(paper_id);
                 CREATE INDEX IF NOT EXISTS idx_paper_user_states_user_id_done ON paper_user_states(user_id, is_done);
                 CREATE INDEX IF NOT EXISTS idx_comments_paper_id ON comments(paper_id);
                 CREATE INDEX IF NOT EXISTS idx_prompt_runs_paper_id ON prompt_runs(paper_id);
@@ -1267,6 +1290,85 @@ class TeamStore:
             for row in rows
         ]
 
+    def replace_attachments(self, rel_path: str, attachments: Iterable[Any]) -> list[PaperAttachment]:
+        bounded = list(attachments)[:3]
+        now = self._timestamp()
+        with self._write_lock:
+            with self._connect() as conn:
+                paper_id = self._paper_id_for_rel_path_locked(conn, rel_path)
+                if paper_id is None:
+                    raise FileNotFoundError(rel_path)
+                source_urls: list[str] = []
+                for attachment in bounded:
+                    source_url = str(getattr(attachment, "source_url", "") or "").strip()
+                    kind = str(getattr(attachment, "kind", "") or "").strip()
+                    title = str(getattr(attachment, "title", "") or "").strip()
+                    local_path = str(getattr(attachment, "local_path", "") or "").strip() or None
+                    if not source_url or not kind or not title:
+                        continue
+                    if local_path:
+                        target = (self.root / local_path).resolve()
+                        if self.root not in target.parents or not target.is_file():
+                            local_path = None
+                    conn.execute(
+                        """
+                        INSERT INTO paper_attachments(paper_id, kind, title, local_path, source_url, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(paper_id, source_url) DO UPDATE SET
+                            kind = excluded.kind,
+                            title = excluded.title,
+                            local_path = excluded.local_path
+                        """,
+                        (paper_id, kind, title[:300], local_path, source_url, now),
+                    )
+                    source_urls.append(source_url)
+                if source_urls:
+                    placeholders = ",".join("?" for _ in source_urls)
+                    conn.execute(
+                        f"DELETE FROM paper_attachments WHERE paper_id = ? AND source_url NOT IN ({placeholders})",
+                        (paper_id, *source_urls),
+                    )
+                else:
+                    conn.execute("DELETE FROM paper_attachments WHERE paper_id = ?", (paper_id,))
+        return self.attachments_for_rel_path(rel_path)
+
+    def attachments_for_rel_path(self, rel_path: str) -> list[PaperAttachment]:
+        with self._connect() as conn:
+            paper_id = self._paper_id_for_rel_path_locked(conn, rel_path)
+            if paper_id is None:
+                return []
+            rows = conn.execute(
+                """
+                SELECT id, kind, title, local_path, source_url, created_at
+                FROM paper_attachments
+                WHERE paper_id = ?
+                ORDER BY created_at ASC, id ASC
+                LIMIT 3
+                """,
+                (paper_id,),
+            ).fetchall()
+        return [
+            PaperAttachment(
+                id=int(row["id"]),
+                kind=str(row["kind"]),
+                title=str(row["title"]),
+                local_path=(str(row["local_path"]) if row["local_path"] else None),
+                source_url=str(row["source_url"]),
+                created_at=str(row["created_at"]),
+            )
+            for row in rows
+        ]
+
+    def attachment_paths_for_rel_path(self, rel_path: str) -> list[Path]:
+        paths: list[Path] = []
+        for attachment in self.attachments_for_rel_path(rel_path):
+            if not attachment.local_path:
+                continue
+            path = (self.root / attachment.local_path).resolve()
+            if self.root in path.parents and path.is_file():
+                paths.append(path)
+        return paths
+
     def add_recommendation(self, rel_path: str, user_id: int, reason: str) -> None:
         reason = reason.strip()
         with self._write_lock:
@@ -1753,6 +1855,7 @@ class TeamStore:
                     "comment_count": 0,
                     "prompt_runs": [],
                     "sources": [],
+                    "attachments": [],
                     "current_user_recommendation_reason": "",
                 }
             paper_id = int(paper_row["id"])
@@ -1849,6 +1952,23 @@ class TeamStore:
                     (paper_id,),
                 ).fetchall()
             ]
+            attachments = [
+                PaperAttachment(
+                    id=int(row["id"]),
+                    kind=str(row["kind"]),
+                    title=str(row["title"]),
+                    local_path=(str(row["local_path"]) if row["local_path"] else None),
+                    source_url=str(row["source_url"]),
+                    created_at=str(row["created_at"]),
+                )
+                for row in conn.execute(
+                    """
+                    SELECT id, kind, title, local_path, source_url, created_at
+                    FROM paper_attachments WHERE paper_id = ? ORDER BY created_at ASC, id ASC LIMIT 3
+                    """,
+                    (paper_id,),
+                ).fetchall()
+            ]
         return {
             "recommendations": recommendations,
             "tags": tags,
@@ -1860,6 +1980,7 @@ class TeamStore:
             "comment_count": len(list(flatten_comments(comments))),
             "prompt_runs": prompt_runs,
             "sources": sources,
+            "attachments": attachments,
             "current_user_recommendation_reason": current_user_recommendation_reason,
         }
 

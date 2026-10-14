@@ -97,6 +97,13 @@ def _csv_setting(value: str) -> frozenset[str]:
     return frozenset(item.strip().casefold() for item in value.split(",") if item.strip())
 
 
+def _bool_setting(value: str, *, name: str) -> bool:
+    normalized = value.strip().casefold()
+    if normalized not in {"true", "false"}:
+        raise ValueError(f"{name} must be true or false.")
+    return normalized == "true"
+
+
 @dataclass(frozen=True, slots=True)
 class PaperReaderConfig:
     data_dir: Path
@@ -130,6 +137,7 @@ class PaperReaderConfig:
     fetch_max_bytes: int
     fetch_page_max_bytes: int
     fetch_max_redirects: int
+    screen_imports: bool
 
     @property
     def feishu_enabled(self) -> bool:
@@ -235,5 +243,9 @@ def load_config(
         fetch_max_redirects=_positive_int_setting(
             setting("PAPER_READER_FETCH_MAX_REDIRECTS", "10"),
             name="PAPER_READER_FETCH_MAX_REDIRECTS",
+        ),
+        screen_imports=_bool_setting(
+            setting("PAPER_READER_SCREEN_IMPORTS", "true"),
+            name="PAPER_READER_SCREEN_IMPORTS",
         ),
     )
