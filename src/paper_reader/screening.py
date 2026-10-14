@@ -1,9 +1,9 @@
 """Semantic screening for library entries and prospective imports.
 
-The screen is deliberately fail-closed: only a syntactically valid ``keep`` result
-permits a prospective import, and a malformed LLM response never deletes a
-library item.  This module holds the policy so the maintenance CLI and import
-scripts use identical packets and decisions.
+The screen is deliberately fail-closed: only a syntactically valid ``keep`` or
+``borderline`` result permits a prospective import, and a malformed LLM response
+never deletes an existing library item. This module holds the policy so the
+maintenance CLI and import scripts use identical packets and decisions.
 """
 
 from __future__ import annotations

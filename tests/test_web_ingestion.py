@@ -98,6 +98,7 @@ class NetutilsTests(unittest.TestCase):
         self.assertEqual(config.fetch_max_bytes, 120 * 1024 * 1024)
         self.assertEqual(config.fetch_page_max_bytes, 20 * 1024 * 1024)
         self.assertEqual(config.fetch_max_redirects, 12)
+        self.assertTrue(config.screen_imports)
 
     def test_document_fetch_accepts_over_25mib_when_configured(self) -> None:
         class Response:
