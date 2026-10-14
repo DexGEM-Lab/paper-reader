@@ -104,6 +104,16 @@ def _bool_setting(value: str, *, name: str) -> bool:
     return normalized == "true"
 
 
+def _hour_setting(value: str, *, name: str) -> int:
+    try:
+        hour = int(value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer between 0 and 23.") from exc
+    if not 0 <= hour <= 23:
+        raise ValueError(f"{name} must be an integer between 0 and 23.")
+    return hour
+
+
 @dataclass(frozen=True, slots=True)
 class PaperReaderConfig:
     data_dir: Path
@@ -138,6 +148,8 @@ class PaperReaderConfig:
     fetch_page_max_bytes: int
     fetch_max_redirects: int
     screen_imports: bool
+    discovery_enabled: bool
+    discovery_hour: int
 
     @property
     def feishu_enabled(self) -> bool:
@@ -247,5 +259,13 @@ def load_config(
         screen_imports=_bool_setting(
             setting("PAPER_READER_SCREEN_IMPORTS", "true"),
             name="PAPER_READER_SCREEN_IMPORTS",
+        ),
+        discovery_enabled=_bool_setting(
+            setting("PAPER_READER_DISCOVERY_ENABLED", "true"),
+            name="PAPER_READER_DISCOVERY_ENABLED",
+        ),
+        discovery_hour=_hour_setting(
+            setting("PAPER_READER_DISCOVERY_HOUR", "7"),
+            name="PAPER_READER_DISCOVERY_HOUR",
         ),
     )

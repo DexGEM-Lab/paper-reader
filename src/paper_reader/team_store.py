@@ -198,6 +198,22 @@ class PaperAttachment:
     created_at: str
 
 
+@dataclass(frozen=True, slots=True)
+class DiscoveryRecord:
+    id: int
+    source: str
+    external_id: str
+    title: str
+    url: str
+    abstract: str
+    score: float
+    reason: str
+    status: str
+    surfaced_at: str
+    decided_by: int | None
+    decided_at: str | None
+
+
 class TeamStore:
     def __init__(
         self,
@@ -432,6 +448,23 @@ class TeamStore:
                     FOREIGN KEY (updated_by_user_id) REFERENCES users(id) ON DELETE SET NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS discoveries (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source TEXT NOT NULL,
+                    external_id TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    url TEXT NOT NULL,
+                    abstract TEXT NOT NULL DEFAULT '',
+                    score REAL NOT NULL,
+                    reason TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'new' CHECK(status IN ('new', 'imported', 'dismissed')),
+                    surfaced_at TEXT NOT NULL,
+                    decided_by INTEGER,
+                    decided_at TEXT,
+                    UNIQUE(source, external_id),
+                    FOREIGN KEY (decided_by) REFERENCES users(id) ON DELETE SET NULL
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_papers_sort_date ON papers(sort_date);
                 CREATE INDEX IF NOT EXISTS idx_papers_display_title ON papers(display_title);
                 CREATE INDEX IF NOT EXISTS idx_papers_folder ON papers(folder);
@@ -447,6 +480,8 @@ class TeamStore:
                 CREATE INDEX IF NOT EXISTS idx_paper_tags_tag_id ON paper_tags(tag_id);
                 CREATE INDEX IF NOT EXISTS idx_chat_threads_paper_id ON chat_threads(paper_id);
                 CREATE INDEX IF NOT EXISTS idx_chat_messages_thread_id ON chat_messages(thread_id);
+                CREATE INDEX IF NOT EXISTS idx_discoveries_surfaced_at ON discoveries(surfaced_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_discoveries_url ON discoveries(url);
                 """
             )
             self._ensure_users_avatar_column(conn)
@@ -1289,6 +1324,147 @@ class TeamStore:
             }
             for row in rows
         ]
+
+    def library_interest_rows(self, *, limit: int = 240) -> list[dict[str, Any]]:
+        """Return the compact, human-curated signals used to describe lab interests."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT p.rel_path, p.display_title, p.resource_kind,
+                       GROUP_CONCAT(DISTINCT t.name) AS tags
+                FROM papers p
+                LEFT JOIN paper_tags pt ON pt.paper_id = p.id
+                LEFT JOIN tags t ON t.id = pt.tag_id
+                GROUP BY p.id
+                ORDER BY COALESCE(p.sort_date, p.updated_at) DESC, p.id DESC
+                LIMIT ?
+                """,
+                (max(1, limit),),
+            ).fetchall()
+        return [
+            {
+                "rel_path": str(row["rel_path"]),
+                "title": str(row["display_title"]),
+                "kind": str(row["resource_kind"]),
+                "tags": [tag.strip() for tag in str(row["tags"] or "").split(",") if tag.strip()],
+            }
+            for row in rows
+        ]
+
+    def discovery_exists(self, *, source: str, external_id: str, url: str) -> bool:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT 1 FROM discoveries
+                WHERE (source = ? AND external_id = ?) OR url = ?
+                LIMIT 1
+                """,
+                (source, external_id, url),
+            ).fetchone()
+        return row is not None
+
+    def discovery_is_in_library(self, *, url: str, arxiv_id: str | None = None) -> bool:
+        """Check canonical web sources and the arXiv base id before scoring a candidate."""
+        with self._connect() as conn:
+            existing = conn.execute("SELECT 1 FROM papers WHERE canonical_url = ? LIMIT 1", (url,)).fetchone()
+            if existing is not None:
+                return True
+            existing = conn.execute(
+                """
+                SELECT 1 FROM paper_sources
+                WHERE source_type IN ('canonical_url', 'pdf_url') AND source_value = ?
+                LIMIT 1
+                """,
+                (url,),
+            ).fetchone()
+            if existing is not None:
+                return True
+            if arxiv_id:
+                normalized = self._normalize_source_value("arxiv", arxiv_id)
+                rows = conn.execute("SELECT source_value FROM paper_sources WHERE source_type = 'arxiv'").fetchall()
+                return any(self._normalize_source_value("arxiv", str(row["source_value"])) == normalized for row in rows)
+        return False
+
+    def add_discoveries(self, rows: Iterable[dict[str, Any]]) -> int:
+        """Persist freshly scored candidates; an old surface is never silently re-ranked."""
+        entries = list(rows)
+        if not entries:
+            return 0
+        inserted = 0
+        with self._write_lock:
+            with self._connect() as conn:
+                for entry in entries:
+                    cursor = conn.execute(
+                        """
+                        INSERT OR IGNORE INTO discoveries(
+                            source, external_id, title, url, abstract, score, reason, status, surfaced_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'new', ?)
+                        """,
+                        (
+                            str(entry["source"]),
+                            str(entry["external_id"]),
+                            str(entry["title"]),
+                            str(entry["url"]),
+                            str(entry.get("abstract") or ""),
+                            float(entry.get("score") or 0),
+                            str(entry.get("reason") or ""),
+                            str(entry.get("surfaced_at") or self._timestamp()),
+                        ),
+                    )
+                    inserted += max(0, cursor.rowcount)
+        return inserted
+
+    def list_discoveries(self, *, limit: int = 100) -> list[DiscoveryRecord]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, source, external_id, title, url, abstract, score, reason, status,
+                       surfaced_at, decided_by, decided_at
+                FROM discoveries
+                ORDER BY date(surfaced_at) DESC,
+                         CASE status WHEN 'new' THEN 0 WHEN 'imported' THEN 1 ELSE 2 END,
+                         score DESC, id DESC
+                LIMIT ?
+                """,
+                (max(1, limit),),
+            ).fetchall()
+        return [
+            DiscoveryRecord(
+                id=int(row["id"]), source=str(row["source"]), external_id=str(row["external_id"]),
+                title=str(row["title"]), url=str(row["url"]), abstract=str(row["abstract"] or ""),
+                score=float(row["score"]), reason=str(row["reason"] or ""), status=str(row["status"]),
+                surfaced_at=str(row["surfaced_at"]), decided_by=(int(row["decided_by"]) if row["decided_by"] is not None else None),
+                decided_at=(str(row["decided_at"]) if row["decided_at"] else None),
+            )
+            for row in rows
+        ]
+
+    def get_discovery(self, discovery_id: int) -> DiscoveryRecord | None:
+        return next((item for item in self.list_discoveries(limit=1000) if item.id == discovery_id), None)
+
+    def decide_discovery(self, discovery_id: int, *, status: str, decided_by: int) -> DiscoveryRecord:
+        if status not in {"imported", "dismissed"}:
+            raise ValueError("Discovery status must be imported or dismissed.")
+        now = self._timestamp()
+        with self._write_lock:
+            with self._connect() as conn:
+                cursor = conn.execute(
+                    """
+                    UPDATE discoveries
+                    SET status = ?, decided_by = ?, decided_at = ?
+                    WHERE id = ? AND status = 'new'
+                    """,
+                    (status, decided_by, now, discovery_id),
+                )
+                if cursor.rowcount != 1:
+                    row = conn.execute("SELECT status FROM discoveries WHERE id = ?", (discovery_id,)).fetchone()
+                    if row is None:
+                        raise KeyError(discovery_id)
+                    raise ValueError(f"Discovery has already been {row['status']}.")
+        decided = self.get_discovery(discovery_id)
+        if decided is None:
+            raise KeyError(discovery_id)
+        return decided
 
     def replace_attachments(self, rel_path: str, attachments: Iterable[Any]) -> list[PaperAttachment]:
         bounded = list(attachments)[:3]
