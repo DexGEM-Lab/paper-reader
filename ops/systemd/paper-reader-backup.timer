@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily Paper Reader S3 snapshot backup
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+Persistent=true
+Unit=paper-reader-backup.service
+
+[Install]
+WantedBy=timers.target

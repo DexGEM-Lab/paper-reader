@@ -1,0 +1,26 @@
+[Unit]
+Description=DexGEM Paper Reader
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=paper-reader
+Group=paper-reader
+WorkingDirectory=/opt/paper-reader/app
+Environment=PYTHONPATH=/opt/paper-reader/app
+EnvironmentFile=/etc/paper-reader/litellm.env
+EnvironmentFile=/etc/paper-reader/paper-reader.env
+ExecStart=/opt/paper-reader/venv/bin/gunicorn --workers 1 --threads 8 --no-control-socket --bind 127.0.0.1:8010 src.paper_reader.wsgi:app
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+UMask=0027
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/paper-reader/data /opt/paper-reader/backups
+PrivateTmp=true
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
