@@ -252,7 +252,11 @@ class RichContentTests(unittest.TestCase):
             markdown = (root / snapshot.rel_path).read_text(encoding="utf-8")
             self.assertIn("/files/Web/", markdown)
             self.assertNotIn("https://example.com/hero.jpg", markdown)
-            self.assertEqual(len(list((root / snapshot.rel_path).with_name(f"{Path(snapshot.rel_path).stem}.assets").glob("*"))), MAX_ASSETS_PER_ITEM)
+            asset_dir = (root / snapshot.rel_path).with_name(f"{Path(snapshot.rel_path).stem}.assets")
+            self.assertEqual(len(list(asset_dir.glob("*"))), MAX_ASSETS_PER_ITEM)
+            store.delete_snapshot(snapshot.rel_path)
+            self.assertFalse((root / snapshot.rel_path).exists())
+            self.assertFalse(asset_dir.exists())
 
     def test_attachment_judge_parsing_enforces_three_item_cap(self) -> None:
         candidates = [{"url": f"https://example.com/file-{index}.pdf", "text": f"Paper {index}"} for index in range(5)]

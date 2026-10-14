@@ -1269,8 +1269,10 @@ class PaperLibrary:
         if not target.exists() or not target.is_file():
             raise FileNotFoundError(rel_path)
         web_metadata_path = self.web_resources.metadata_path_for(target)
-        target.unlink()
-        web_metadata_path.unlink(missing_ok=True)
+        if web_metadata_path.exists():
+            self.web_resources.delete_snapshot(rel_path)
+        else:
+            target.unlink()
         self._hash_cache.pop(rel_path, None)
         self._delete_manual_date(rel_path)
         self.clear_derived_artifacts(rel_path)
