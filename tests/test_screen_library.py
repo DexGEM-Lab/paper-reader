@@ -7,7 +7,8 @@ from pathlib import Path
 
 from src.paper_reader.app import PaperRecord, create_app
 from src.paper_reader.config import load_config
-from src.paper_reader.screening import candidate_packet, delete_library_item, screen_packets
+from scripts.screen_library import apply_explicit_drops
+from src.paper_reader.screening import ScreeningPacket, candidate_packet, delete_library_item, library_packet, screen_packets
 
 
 class FakeLLM:
@@ -49,6 +50,26 @@ class ScreeningDecisionTests(unittest.TestCase):
         self.assertEqual(results[0].decision, "error")
         self.assertFalse(results[0].actionable)
         self.assertIn("JSON", results[0].error or "")
+
+    def test_javascript_shell_forces_drop_without_llm_override(self) -> None:
+        class NoLLM:
+            def complete(self, *args, **kwargs):  # noqa: ANN002, ANN003
+                raise AssertionError("JS shell must be rejected before the LLM is called")
+
+        packet = ScreeningPacket(
+            item_id="Web/notion.md",
+            rel_path="Web/notion.md",
+            url="https://excessive-share-4ad.notion.site/",
+            title="Notion | Where teams and agents work together",
+            kind="article",
+            provenance=[],
+            content="You need to enable JavaScript to run this app. Notion marketing landing page.",
+            fetch_status="ok",
+        )
+        result = screen_packets([packet], NoLLM())[0]
+
+        self.assertEqual(result.decision, "drop")
+        self.assertIn("JavaScript", result.reason)
 
 
 class ScreeningDeletionTests(unittest.TestCase):
@@ -105,6 +126,48 @@ class ScreeningDeletionTests(unittest.TestCase):
         self.app.action_queue.stop()
         self.app.job_queue.stop_all()
         self.temp_dir.cleanup()
+
+    def test_sync_strips_html_and_entities_from_titles_before_db_write(self) -> None:
+        self.app.team_store.sync_papers([
+            PaperRecord(
+                rel_path="Web/title.md", file_name="title.md", folder="Web", extension=".md",
+                title="<b>Robot &amp; Agent</b>", display_title="&lt;i&gt;Robot &amp; Agent&lt;/i&gt;",
+                preview_text="plain", extracted_date=None, date_precision=None, date_source=None, sort_date=None,
+                file_size=5, modified_at="2026-01-01T00:00:00", preview_kind="web", prompt_result_count=0,
+                prompt_result_slugs=[], is_done=False, resource_kind="article", source_url="https://example.com/title",
+                source_domain="example.com", fetch_status="ok",
+            )
+        ])
+        with sqlite3.connect(self.app.team_store.db_path) as conn:
+            title, display_title = conn.execute(
+                "SELECT title, display_title FROM papers WHERE rel_path = 'Web/title.md'"
+            ).fetchone()
+        self.assertEqual((title, display_title), ("Robot & Agent", "Robot & Agent"))
+
+    def test_explicit_url_drop_prefers_exact_case_over_canonical_duplicate(self) -> None:
+        duplicate_path = "Web/canonical.md"
+        for rel_path, source_url in ((self.rel_path, "https://robodojo-benchmark.com/LeaderBoard"), (duplicate_path, "https://robodojo-benchmark.com/leaderboard")):
+            path = self.app.config["LIBRARY_ROOT"] / rel_path
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("# benchmark\n", encoding="utf-8")
+            self.app.team_store.sync_papers([
+                PaperRecord(
+                    rel_path=rel_path, file_name=Path(rel_path).name, folder="Web", extension=".md", title="benchmark",
+                    display_title="benchmark", preview_text="benchmark", extracted_date=None, date_precision=None,
+                    date_source=None, sort_date=None, file_size=12, modified_at="2026-01-01T00:00:00", preview_kind="web",
+                    prompt_result_count=0, prompt_result_slugs=[], is_done=False, resource_kind="article", source_url=source_url,
+                    source_domain="robodojo-benchmark.com", fetch_status="ok",
+                )
+            ])
+            self.app.team_store.add_source(rel_path, source_type="canonical_url", source_value=source_url, source_url=source_url)
+        scan = self.app.library.scan(force=True, include_done=True)
+        packets = {record.rel_path: (record, library_packet(self.app, record)) for record in scan.papers}
+
+        result = apply_explicit_drops(self.app, packets, ["https://robodojo-benchmark.com/LeaderBoard"])
+
+        self.assertEqual(result, {"deleted": 1, "not_found": 0, "ambiguous": 0, "delete_failed": 0})
+        self.assertFalse((self.app.config["LIBRARY_ROOT"] / self.rel_path).exists())
+        self.assertTrue((self.app.config["LIBRARY_ROOT"] / duplicate_path).exists())
 
     def test_deletion_cascades_all_paper_dependents(self) -> None:
         with sqlite3.connect(self.app.team_store.db_path) as conn:

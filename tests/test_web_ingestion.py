@@ -214,11 +214,34 @@ class WebClassificationTests(unittest.TestCase):
         self.assertEqual(project.resource_kind, "project")
         self.assertEqual(news.resource_kind, "news")
 
+    def test_canonical_url_folds_host_and_path_case_and_trailing_slashes(self) -> None:
+        upper = classify_import_target("HTTPS://ROBODOJO-BENCHMARK.COM/LeaderBoard///")
+        lower = classify_import_target("https://robodojo-benchmark.com/leaderboard")
+        self.assertEqual(upper.canonical_url, "https://robodojo-benchmark.com/leaderboard")
+        self.assertEqual(upper.source_value, lower.source_value)
+
     def test_trafilatura_extracts_markdown_and_metadata(self) -> None:
         markdown, metadata = extract_web_content(fetched(ARTICLE_HTML), resource_kind="article")
         self.assertIn("research system", markdown.casefold())
         self.assertEqual(metadata["title"], "Research systems in practice")
         self.assertIn("Ada Researcher", str(metadata["author"]))
+
+    def test_extraction_sanitizes_html_titles_and_rejects_absurd_dates(self) -> None:
+        html = b"""<html><head><title>&lt;em&gt;Robot &amp;amp; Agent&lt;/em&gt;</title>
+        <meta property=\"article:published_time\" content=\"2046-06-01\"></head><body><article>
+        <p>This is a substantive technical research article with enough extracted body text to be retained in a snapshot.</p>
+        </article></body></html>"""
+        markdown, metadata = extract_web_content(fetched(html), resource_kind="article")
+        self.assertIn("substantive technical", markdown)
+        self.assertEqual(metadata["title"], "Robot & Agent")
+        with tempfile.TemporaryDirectory() as tempdir:
+            store = WebResourceStore(Path(tempdir))
+            with patch("src.paper_reader.web_resources.fetch_public_url", return_value=fetched(html)):
+                snapshot = store.fetch_and_store(classify_import_target("https://example.com/future"))
+            stored = store.metadata_for_rel_path(snapshot.rel_path)
+            assert stored is not None
+            self.assertIsNone(stored["published_date"])
+            self.assertIsNone(stored["sort_date"])
 
 
 class RichContentTests(unittest.TestCase):
@@ -445,17 +468,26 @@ class WebImportIntegrationTests(unittest.TestCase):
         self.assertEqual(len(list((self.library / "Web").rglob("*.md"))), 1)
         self.assertIn("Updated research system", (self.library / first_path).read_text(encoding="utf-8"))
 
-    def test_failed_fetch_still_creates_retryable_item(self) -> None:
+    def test_failed_web_extraction_is_dropped_even_when_screening_is_disabled(self) -> None:
         url = "https://example.com/paywalled"
         result = self.run_import(url, error=RuntimeError("HTTP 403 for source"))
         item = result["items"][0]
         self.assertEqual(item["status"], "failed")
-        self.assertTrue(item["rel_path"])
-        record = self.app.library.build_record_for_rel_path(item["rel_path"], [])
-        self.assertEqual(record.fetch_status, "paywalled")
-        html = self.client.get(f"/?paper={item['rel_path']}&tab=source").get_data(as_text=True)
-        self.assertIn("FETCH-PAYWALLED", html)
-        self.assertIn("Retry fetch", html)
+        self.assertIn("网页正文提取失败", item["message"])
+        self.assertIsNone(self.app.team_store.find_paper_by_source("canonical_url", url))
+        self.assertEqual(list((self.library / "Web").rglob("*.md")), [])
+
+    def test_notion_style_javascript_shell_is_dropped_before_llm_screening(self) -> None:
+        url = "https://excessive-share-4ad.notion.site/"
+        shell = b"""<html><head><title>Notion | Where teams and agents work together</title></head>
+        <body><main><p>You need to enable JavaScript to run this app. Notion is where teams and agents
+        work together to plan, build, and share knowledge across the organization.</p></main></body></html>"""
+        result = self.run_import(url, response=fetched(shell, url=url))
+        item = result["items"][0]
+        self.assertEqual(item["status"], "failed")
+        self.assertIn("JavaScript 的壳页面", item["message"])
+        self.assertIsNone(self.app.team_store.find_paper_by_source("canonical_url", url))
+        self.assertEqual(list((self.library / "Web").rglob("*.md")), [])
 
     def test_private_url_import_is_blocked_without_network_access(self) -> None:
         handler = self.app.action_queue._handlers["remote-import"]
@@ -466,9 +498,9 @@ class WebImportIntegrationTests(unittest.TestCase):
         )
         item = result["items"][0]
         self.assertEqual(item["status"], "failed")
-        record = self.app.library.build_record_for_rel_path(item["rel_path"], [])
-        self.assertEqual(record.fetch_status, "failed")
-        self.assertIn("non-public", record.preview_text)
+        self.assertIn("网页正文提取失败", item["message"])
+        self.assertIsNone(self.app.team_store.find_paper_by_source("canonical_url", "http://127.0.0.1/research"))
+        self.assertEqual(list((self.library / "Web").rglob("*.md")), [])
 
     def test_live_import_screening_allows_and_flags_borderline_web_item(self) -> None:
         url = "https://example.com/research/borderline"

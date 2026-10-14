@@ -18,6 +18,13 @@ from typing import Any, Iterable, Protocol
 SCREENABLE_KINDS = frozenset({"paper", "article", "project", "news"})
 _DECISIONS = frozenset({"keep", "drop", "borderline"})
 _FENCED_JSON = re.compile(r"```(?:json)?\s*(.*?)```", re.IGNORECASE | re.DOTALL)
+_JS_SHELL_MARKERS = (
+    "enable javascript",
+    "requires javascript",
+    "require javascript",
+    "javascript is disabled",
+    "javascript must be enabled",
+)
 
 
 class CompletionClient(Protocol):
@@ -132,6 +139,23 @@ def candidate_packet(*, url: str, context_text: str, title: str = "", kind: str 
     )
 
 
+def mandatory_drop_reason(packet: ScreeningPacket) -> str | None:
+    """Return the deterministic import-gate rejection reason, if any.
+
+    These observations are stronger than an LLM's semantic judgment: an error
+    snapshot has no reading value, and a JavaScript shell is not the source page
+    the user asked to archive.  Keep this policy independent of URL reputation
+    and Feishu context so promising-looking marketing links cannot bypass it.
+    """
+    fetch_status = clean_text(packet.fetch_status, limit=50).casefold()
+    if fetch_status in {"failed", "paywalled", "error", "unextractable"}:
+        return f"网页正文提取失败（状态：{fetch_status}）。"
+    content = clean_text(packet.content, limit=2000).casefold()
+    if any(marker in content for marker in _JS_SHELL_MARKERS):
+        return "网页仅返回需要 JavaScript 的壳页面，未提取到可归档正文。"
+    return None
+
+
 def screen_packets(
     packets: Iterable[ScreeningPacket],
     client: CompletionClient,
@@ -142,16 +166,25 @@ def screen_packets(
     """Classify packets in small batches, retaining an explicit error per bad item."""
     if batch_size < 1:
         raise ValueError("batch_size must be positive")
-    pending = list(packets)
-    decisions: list[ScreeningDecision] = []
+    original = list(packets)
+    forced: dict[str, ScreeningDecision] = {}
+    pending: list[ScreeningPacket] = []
+    for packet in original:
+        reason = mandatory_drop_reason(packet)
+        if reason is None:
+            pending.append(packet)
+        else:
+            forced[packet.item_id] = ScreeningDecision(packet.item_id, packet.url, "drop", reason, None)
+
+    classified: dict[str, ScreeningDecision] = {}
     for start in range(0, len(pending), batch_size):
         batch = pending[start : start + batch_size]
         try:
             raw = client.complete(_screening_messages(batch), model=model, session_id="paper-reader-screening")
-            decisions.extend(_parse_batch(raw, batch))
+            classified.update({decision.item_id: decision for decision in _parse_batch(raw, batch)})
         except Exception as exc:  # Network/API failure must never become a deletion.
-            decisions.extend(_error_decision(packet, f"LLM request failed: {exc}") for packet in batch)
-    return decisions
+            classified.update({packet.item_id: _error_decision(packet, f"LLM request failed: {exc}") for packet in batch})
+    return [forced.get(packet.item_id) or classified[packet.item_id] for packet in original]
 
 
 def _screening_messages(batch: list[ScreeningPacket]) -> list[dict[str, str]]:

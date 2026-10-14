@@ -11,6 +11,7 @@ from typing import Any, Iterable
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from .arxiv_markdown import base_arxiv_id, normalize_arxiv_id
+from .text_sanitization import sanitize_title
 
 
 DEFAULT_DB_NAME = ".paper-reader-team.db"
@@ -970,8 +971,8 @@ class TeamStore:
                             paper.file_name,
                             paper.folder,
                             paper.extension,
-                            paper.title,
-                            paper.display_title,
+                            sanitize_title(paper.title),
+                            sanitize_title(paper.display_title) or sanitize_title(paper.title) or paper.file_name,
                             str(paper.preview_text or "")[:20000],
                             paper.extracted_date,
                             paper.sort_date,
@@ -1140,8 +1141,8 @@ class TeamStore:
                         new_paper.file_name,
                         new_paper.folder,
                         new_paper.extension,
-                        new_paper.title,
-                        new_paper.display_title,
+                        sanitize_title(new_paper.title),
+                        sanitize_title(new_paper.display_title) or sanitize_title(new_paper.title) or new_paper.file_name,
                         str(new_paper.preview_text or "")[:20000],
                         new_paper.extracted_date,
                         new_paper.sort_date,
@@ -1403,7 +1404,7 @@ class TeamStore:
                         (
                             str(entry["source"]),
                             str(entry["external_id"]),
-                            str(entry["title"]),
+                            sanitize_title(entry["title"]) or "Untitled discovery",
                             str(entry["url"]),
                             str(entry.get("abstract") or ""),
                             float(entry.get("score") or 0),

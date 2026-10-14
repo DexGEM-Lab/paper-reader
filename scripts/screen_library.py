@@ -25,6 +25,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from src.paper_reader.app import create_app  # noqa: E402
 from src.paper_reader.config import load_config  # noqa: E402
 from src.paper_reader.llm import get_llm_client  # noqa: E402
+from src.paper_reader.web_resources import canonicalize_url  # noqa: E402
 from src.paper_reader.screening import (  # noqa: E402
     ScreeningDecision,
     ScreeningPacket,
@@ -42,6 +43,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--dry-run", action="store_true", help="Print decisions only; do not write audit, metadata, DB, or files.")
     parser.add_argument("--apply-drops", action="store_true", help="Delete only previously audited DROP decisions.")
     parser.add_argument("--confirm-reviewed-drops", action="store_true", help="Required acknowledgement before --apply-drops.")
+    parser.add_argument("--drop-urls", type=Path, help="Delete URLs explicitly listed one per line, without an LLM decision.")
     parser.add_argument("--rescreen", action="store_true", help="Ignore matching prior audit decisions and query the LLM again.")
     parser.add_argument("--batch-size", type=int, default=8, help="Items per LLM call (default: 8).")
     parser.add_argument("--model", default="deepseek-flash", help="Allowed LiteLLM model (default: deepseek-flash).")
@@ -102,6 +104,79 @@ def latest_decisions(path: Path) -> dict[str, tuple[str, ScreeningDecision]]:
     return latest
 
 
+def _explicit_drop_urls(path: Path) -> list[str]:
+    if not path.is_file():
+        raise ValueError(f"--drop-urls file does not exist: {path}")
+    urls = [line.strip() for line in path.read_text(encoding="utf-8", errors="replace").splitlines() if line.strip() and not line.lstrip().startswith("#")]
+    if not urls:
+        raise ValueError("--drop-urls must contain at least one URL.")
+    for url in urls:
+        canonicalize_url(url)
+    return list(dict.fromkeys(urls))
+
+
+def _packet_urls(app: Any, record: Any, packet: ScreeningPacket) -> set[str]:
+    urls = {str(packet.url or "").strip(), str(getattr(record, "source_url", "") or "").strip()}
+    for source in app.team_store.sources_for_rel_path(record.rel_path):
+        if isinstance(source, dict):
+            urls.add(str(source.get("source_url") or source.get("source_value") or "").strip())
+    return {url for url in urls if url}
+
+
+def apply_explicit_drops(app: Any, packets_by_path: dict[str, tuple[Any, ScreeningPacket]], urls: list[str], *, dry_run: bool = False) -> dict[str, int]:
+    """Delete reviewed URLs using the same filesystem+database cascade as Stage K.
+
+    Exact source URL matches take priority.  Only a unique canonicalized match is
+    eligible as a fallback, which prevents an uppercase duplicate request from
+    accidentally deleting its lower-case canonical survivor.
+    """
+    entries = [(rel_path, record, packet, _packet_urls(app, record, packet)) for rel_path, (record, packet) in packets_by_path.items()]
+    deleted = missing = ambiguous = failures = 0
+    deleted_paths: set[str] = set()
+    for requested_url in urls:
+        exact = [entry for entry in entries if requested_url in entry[3]]
+        if not exact:
+            normalized = canonicalize_url(requested_url)
+            canonical_matches = []
+            for entry in entries:
+                if any(_canonical_or_empty(candidate) == normalized for candidate in entry[3]):
+                    canonical_matches.append(entry)
+            exact = canonical_matches
+        if not exact:
+            missing += 1
+            emit({"url": requested_url, "status": "not-found"})
+            continue
+        if len(exact) != 1:
+            ambiguous += 1
+            emit({"url": requested_url, "status": "ambiguous", "rel_paths": [entry[0] for entry in exact]})
+            continue
+        rel_path, _, _, _ = exact[0]
+        if rel_path in deleted_paths:
+            continue
+        if dry_run:
+            emit({"url": requested_url, "rel_path": rel_path, "status": "would-delete"})
+            continue
+        try:
+            delete_library_item(app, rel_path)
+            deleted_paths.add(rel_path)
+            deleted += 1
+            emit({"url": requested_url, "rel_path": rel_path, "status": "deleted"})
+        except FileNotFoundError:
+            missing += 1
+            emit({"url": requested_url, "rel_path": rel_path, "status": "already-absent"})
+        except Exception as exc:
+            failures += 1
+            emit({"url": requested_url, "rel_path": rel_path, "status": "delete-failed", "error": str(exc)})
+    return {"deleted": deleted, "not_found": missing, "ambiguous": ambiguous, "delete_failed": failures}
+
+
+def _canonical_or_empty(value: str) -> str:
+    try:
+        return canonicalize_url(value)
+    except ValueError:
+        return ""
+
+
 def apply_audited_drops(app: Any, packets_by_path: dict[str, tuple[Any, ScreeningPacket]], audit: Path) -> dict[str, int]:
     latest = latest_decisions(audit)
     deleted = missing = failures = retagged = 0
@@ -131,6 +206,8 @@ def main(argv: list[str] | None = None) -> int:
         raise ValueError("--batch-size must be positive")
     if args.qps is not None and args.qps <= 0:
         raise ValueError("--qps must be positive")
+    if args.apply_drops and args.drop_urls:
+        raise ValueError("Use either --apply-drops or --drop-urls, not both.")
     if args.apply_drops and not args.confirm_reviewed_drops:
         raise ValueError("--apply-drops requires --confirm-reviewed-drops after human review of the audit.")
 
@@ -146,6 +223,11 @@ def main(argv: list[str] | None = None) -> int:
             result = apply_audited_drops(app, packets_by_path, audit)
             emit({"summary": {"library_items": len(scan.papers), **result, "audit": str(audit)}})
             return 1 if result["delete_failed"] else 0
+        if args.drop_urls:
+            urls = _explicit_drop_urls(args.drop_urls)
+            result = apply_explicit_drops(app, packets_by_path, urls, dry_run=args.dry_run)
+            emit({"summary": {"library_items": len(scan.papers), "requested_urls": len(urls), **result, "dry_run": args.dry_run}})
+            return 1 if any(result[key] for key in ("not_found", "ambiguous", "delete_failed")) else 0
 
         old = latest_decisions(audit)
         to_screen: list[ScreeningPacket] = []

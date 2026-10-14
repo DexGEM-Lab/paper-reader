@@ -19,7 +19,9 @@ from urllib.parse import parse_qsl, quote, urlencode, urljoin, urlsplit, urlunsp
 from trafilatura import extract, extract_metadata
 
 from .arxiv_markdown import base_arxiv_id, normalize_arxiv_id
+from .date_sanity import sane_sort_date
 from .netutils import FetchedResponse, fetch_public_url
+from .text_sanitization import sanitize_title
 
 WEB_ROOT_NAME = "Web"
 WEB_METADATA_SUFFIX = ".json"
@@ -145,7 +147,7 @@ def canonicalize_url(url: str) -> str:
         host = f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
     elif ":" in host:
         host = f"[{host}]"
-    path = re.sub(r"/{2,}", "/", parsed.path or "/")
+    path = re.sub(r"/{2,}", "/", parsed.path or "/").casefold()
     if path != "/":
         path = path.rstrip("/") or "/"
     query_items = [
@@ -467,7 +469,7 @@ def extract_web_content(response: FetchedResponse, *, resource_kind: str) -> tup
     html_text = response.body.decode("utf-8", errors="replace")
     metadata_obj = extract_metadata(html_text, default_url=response.final_url)
     metadata = {
-        "title": str(getattr(metadata_obj, "title", "") or "").strip() or None,
+        "title": sanitize_title(getattr(metadata_obj, "title", "")) or None,
         "author": str(getattr(metadata_obj, "author", "") or "").strip() or None,
         "date": str(getattr(metadata_obj, "date", "") or "").strip() or None,
         "sitename": str(getattr(metadata_obj, "sitename", "") or "").strip() or None,
@@ -491,10 +493,7 @@ def extract_web_content(response: FetchedResponse, *, resource_kind: str) -> tup
 
 
 def _published_sort_date(value: str | None) -> str | None:
-    if not value:
-        return None
-    match = re.match(r"(\d{4}-\d{2}-\d{2})", value)
-    return match.group(1) if match else None
+    return sane_sort_date(value)
 
 
 def _resource_markdown(
@@ -881,9 +880,9 @@ class WebResourceStore:
             final_url = response.final_url
             html_text = response.body.decode("utf-8", errors="replace")
             content, extracted = extract_web_content(response, resource_kind=target.resource_kind)
-            title = str(extracted.get("title") or title).strip()
+            title = sanitize_title(extracted.get("title") or title) or title
             author = str(extracted.get("author") or "").strip() or None
-            published_date = str(extracted.get("date") or "").strip() or None
+            published_date = _published_sort_date(str(extracted.get("date") or "").strip())
             site_name = str(extracted.get("sitename") or "").strip() or None
         except Exception as exc:
             error = str(exc)

@@ -43,6 +43,7 @@ from .arxiv_markdown import (
 from .chat_ai import stream_answer_question_about_document
 from .chat_queue import PaperChatQueue
 from .config import PaperReaderConfig, load_config, load_env_file_values, normalize_public_base_url
+from .date_sanity import sane_sort_date
 from .document_utils import ALLOWED_EXTENSIONS, LIBRARY_EXTENSIONS, extract_document_metadata
 from .discovery import DailyDiscoveryScheduler, DiscoveryService
 from .insights_history import HistoricalInsightsStore, extract_digest
@@ -53,11 +54,12 @@ from .markdown_render import render_markdown
 from .netutils import fetch_public_url
 from .offline_package import build_offline_manifest, manifest_json as build_manifest_json, offline_prompt_arcname, offline_source_arcname
 from .prompt_manager import DEFAULT_PROMPT_SLUG, PromptDefinition, PromptStore, parse_checkbox
-from .screening import ScreeningPacket, screen_packets
+from .screening import ScreeningPacket, mandatory_drop_reason, screen_packets
 from .settings import SettingsStore
 from .source_archive import day_paper_map, load_source_day, load_source_days, local_pdf_path_for
 from .task_queue import PaperJobQueue
 from .team_store import TeamStore, TeamUser, flatten_comments, slugify_text
+from .text_sanitization import sanitize_title
 from .web_resources import ImportTarget, WebResourceStore, classify_import_target
 
 CACHE_FILE_NAME = ".paper_reader_index.json"
@@ -811,17 +813,16 @@ class PaperLibrary:
             except Exception:
                 meta = {"title": path.stem, "preview_text": "", "full_text": ""}
 
-        title = self._safe_text(meta.get("title") or path.stem)
+        title = sanitize_title(self._safe_text(meta.get("title") or path.stem)) or sanitize_title(path.stem)
         preview_text = self._safe_text(meta.get("preview_text") or "")
         resource_metadata = self.web_resources.metadata_for_rel_path(rel_path) or {}
         if resource_metadata.get("title"):
-            title = self._safe_text(str(resource_metadata["title"]))
-        date_info = self._extract_date(title, preview_text, path.name)
-        resource_sort_date = str(resource_metadata.get("sort_date") or "").strip()
-        resource_published_date = str(resource_metadata.get("published_date") or "").strip()
+            title = sanitize_title(self._safe_text(str(resource_metadata["title"]))) or sanitize_title(path.stem)
+        date_info = self._sane_date_info(self._extract_date(title, preview_text, path.name))
+        resource_sort_date = sane_sort_date(resource_metadata.get("sort_date"))
         if resource_sort_date:
             date_info = {
-                "display_date": resource_published_date or resource_sort_date,
+                "display_date": resource_sort_date,
                 "precision": "day",
                 "source": "web_metadata",
                 "sort_date": resource_sort_date,
@@ -864,6 +865,14 @@ class PaperLibrary:
         if not value:
             return ""
         return value.encode("utf-8", "backslashreplace").decode("utf-8")
+
+    @staticmethod
+    def _sane_date_info(date_info: dict[str, str | None]) -> dict[str, str | None]:
+        """Reject implausible dates inferred from untrusted titles and document text."""
+        sort_date = sane_sort_date(date_info.get("sort_date"))
+        if sort_date is None:
+            return {"display_date": None, "precision": None, "source": None, "sort_date": None}
+        return {**date_info, "sort_date": sort_date}
 
     def build_record_for_rel_path(self, rel_path: str, active_prompt_slugs: list[str]) -> PaperRecord:
         with self._manual_date_lock:
@@ -3062,23 +3071,34 @@ def create_app(
                     if resolved.get("route") == "web":
                         snapshot = fetched_result
                         rel_path = str(snapshot.rel_path)
-                        if (
-                            app.config["SCREEN_IMPORTS"]
-                            and not item.get("refresh")
-                        ):
+                        snapshot_path = app.library.resolve_relative_path(rel_path)  # type: ignore[attr-defined]
+                        sample = snapshot_path.read_text(encoding="utf-8", errors="replace")[:1500]
+                        packet = ScreeningPacket(
+                            item_id=rel_path,
+                            rel_path=rel_path,
+                            title=snapshot.title,
+                            url=resolved["canonical_url"],
+                            kind=resolved["resource_kind"],
+                            provenance=[],
+                            content=sample,
+                            fetch_status=snapshot.fetch_status,
+                        )
+                        forced_reason = mandatory_drop_reason(packet)
+                        if forced_reason:
+                            app.library.web_resources.delete_snapshot(rel_path)  # type: ignore[attr-defined]
+                            if item.get("refresh"):
+                                app.team_store.delete_paper(rel_path)  # type: ignore[attr-defined]
+                            update_action_item(
+                                items,
+                                key=target,
+                                status="failed",
+                                message=f"链接未通过内容筛选：{forced_reason}",
+                                source=resolved,
+                            )
+                            report(action_progress_percent(items), f"链接未通过内容筛选：{target}", build_action_result_payload(items))
+                            continue
+                        if app.config["SCREEN_IMPORTS"] and not item.get("refresh"):
                             try:
-                                snapshot_path = app.library.resolve_relative_path(rel_path)  # type: ignore[attr-defined]
-                                sample = snapshot_path.read_text(encoding="utf-8", errors="replace")[:1500]
-                                packet = ScreeningPacket(
-                                    item_id=rel_path,
-                                    rel_path=rel_path,
-                                    title=snapshot.title,
-                                    url=resolved["canonical_url"],
-                                    kind=resolved["resource_kind"],
-                                    provenance=[],
-                                    content=sample,
-                                    fetch_status=snapshot.fetch_status,
-                                )
                                 decision = screen_packets(
                                     [packet],
                                     get_llm_client(runtime_config),
