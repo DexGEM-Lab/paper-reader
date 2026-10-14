@@ -2,13 +2,19 @@
 {% from '_comment_thread.html' import render_comments with context %}
 {% from '_avatar.html' import render_avatar %}
 {% block title %}论文阅读器{% endblock %}
+{% block topbar_actions %}
+  <button type="button" class="topbar-tool-button" data-pane-button="right" data-toggle-pane="right" aria-pressed="false" title="打开讨论区" aria-label="打开讨论区">
+    讨论{% if selected_paper and selected_paper_context.comment_count %} · {{ selected_paper_context.comment_count }}{% endif %}
+  </button>
+  <button type="button" class="topbar-tool-button" id="settings-open-button" aria-controls="settings-drawer" aria-expanded="false" title="导入、任务与设置">工具</button>
+{% endblock %}
 {% block content %}
 <section class="workspace-shell tri-workspace" data-layout-root>
   <aside class="sidebar-pane card layout-pane pane-left" data-pane="left">
     <div class="pane-top pane-top-compact">
       <div>
         <p class="eyebrow">Library</p>
-        <h2>推荐列表 / 找论文</h2>
+        <h2>书库</h2>
       </div>
       <button type="button" class="icon-button pane-toggle" data-pane-button="left" data-toggle-pane="left" title="折叠导航栏" aria-label="折叠导航栏">
         <span class="icon-shell" aria-hidden="true">
@@ -52,45 +58,32 @@
       </section>
 
       <section class="sidebar-library-panel" data-sidebar-panel="library" hidden>
-        <div class="sidebar-index-head">
-          <strong>论文索引</strong>
-          <span><span id="paper-count">{{ papers|length }}</span> 篇</span>
-        </div>
-
-        <form class="nav-filter-form" action="{{ url_for('index') }}" method="get">
+        <form class="nav-filter-form library-filter-row" action="{{ url_for('index') }}" method="get">
           <input type="hidden" name="paper" value="{{ selected_paper.rel_path if selected_paper else '' }}">
           <input type="hidden" name="tab" value="{{ selected_tab }}">
-          <label>
-            <span>搜索</span>
-            <input type="search" name="q" value="{{ query }}" placeholder="标题、标签、推荐人、来源">
-          </label>
-          <label>
-            <span>文件夹</span>
-            <select name="folder">
-              <option value="" {% if not current_folder %}selected{% endif %}>全部文件夹</option>
-              {% for folder in folders %}
-                {% if folder %}
-                  <option value="{{ folder }}" {% if current_folder == folder %}selected{% endif %}>{{ folder }}</option>
-                {% endif %}
-              {% endfor %}
-            </select>
-          </label>
-          <label>
-            <span>排序</span>
-            <select name="sort">
-              <option value="date_desc" {% if sort_by == 'date_desc' %}selected{% endif %}>日期从新到旧</option>
-              <option value="date_asc" {% if sort_by == 'date_asc' %}selected{% endif %}>日期从旧到新</option>
-              <option value="title" {% if sort_by == 'title' %}selected{% endif %}>按标题</option>
-            </select>
-          </label>
+          <input type="search" name="q" value="{{ query }}" placeholder="搜索标题、标签、来源" aria-label="搜索">
+          <select name="folder" aria-label="文件夹" onchange="this.form.submit()">
+            <option value="" {% if not current_folder %}selected{% endif %}>全部文件夹</option>
+            {% for folder in folders %}
+              {% if folder %}
+                <option value="{{ folder }}" {% if current_folder == folder %}selected{% endif %}>{{ folder }}</option>
+              {% endif %}
+            {% endfor %}
+          </select>
+          <select name="sort" aria-label="排序" onchange="this.form.submit()">
+            <option value="date_desc" {% if sort_by == 'date_desc' %}selected{% endif %}>最新优先</option>
+            <option value="date_asc" {% if sort_by == 'date_asc' %}selected{% endif %}>最早优先</option>
+            <option value="title" {% if sort_by == 'title' %}selected{% endif %}>按标题</option>
+          </select>
           <label class="checkbox-line done-toggle-line">
-            <input type="checkbox" name="show_done" value="1" {% if show_done %}checked{% endif %}>
-            显示我已读的论文
+            <input type="checkbox" name="show_done" value="1" {% if show_done %}checked{% endif %} onchange="this.form.submit()">
+            含已读
           </label>
-          <div class="tool-actions nav-filter-actions">
-            <button type="submit">更新列表</button>
-          </div>
+          <button type="submit" class="filter-submit">筛选</button>
         </form>
+        <div class="sidebar-index-head">
+          <span><span id="paper-count">{{ papers|length }}</span> 篇</span>
+        </div>
 
         {% if papers %}
           <div class="paper-tree-scroll" id="paper-tree-scroll">
@@ -122,21 +115,14 @@
                               data-month-key="{{ month_group.key }}"
                               href="{{ url_for('index', folder=current_folder, q=query, sort=sort_by, paper=paper.rel_path, tab=selected_tab if selected_paper and paper.rel_path == selected_paper.rel_path else 'source', show_done='1' if show_done else None) }}"
                             >
-                              <div class="paper-row-top">
+                              <span class="paper-row-top">
                                 <span class="paper-row-type">{{ format_resource_kind(paper.resource_kind) }}</span>
                                 {% if paper.extracted_date %}
                                   <span class="paper-row-date">{{ paper.extracted_date }}</span>
                                 {% endif %}
-                              </div>
+                              </span>
                               <strong class="paper-row-title">{{ paper.display_title }}</strong>
-                              <span class="paper-row-file">{{ paper.source_domain or paper.file_name }}</span>
-                              <div class="paper-row-bottom">
-                                <div class="paper-row-flags">
-                                  {% if paper.folder %}<span class="paper-row-folder">{{ paper.folder }}</span>{% endif %}
-                                  {% if paper.is_done %}<span class="paper-row-done">已读</span>{% endif %}
-                                </div>
-                                <span class="paper-row-summary">{{ paper.prompt_result_count }}/{{ active_prompt_count }}</span>
-                              </div>
+                              <span class="paper-row-file">{{ paper.source_domain or paper.file_name }}{% if paper.folder %} · {{ paper.folder }}{% endif %}{% if paper.is_done %} · 已读{% endif %}</span>
                             </a>
                           {% endfor %}
                         </div>
@@ -150,7 +136,7 @@
         {% else %}
           <div class="compact-empty" id="paper-list-empty">
             <h3>没有匹配结果</h3>
-            <p>试试换个关键词，或者点右下角圆形按钮导入、上传论文。</p>
+            <p>换个关键词试试，或者点顶栏的「+ 添加」导入链接、上传论文。</p>
           </div>
         {% endif %}
       </section>
@@ -160,25 +146,95 @@
   <div class="pane-resizer pane-resizer-left" data-resizer="left" aria-hidden="true"></div>
 
   <section class="viewer-pane card layout-pane pane-center" data-pane="center">
-    <div class="viewer-toolbar viewer-toolbar-slim">
-      <div class="viewer-toolbar-main">
-        <div class="viewer-toolbar-copy">
-          {% if selected_paper %}
-            <p class="eyebrow">{{ format_resource_kind(selected_paper.resource_kind) }} · {{ '原文阅读' if selected_tab == 'source' else '核心解读' }}</p>
-            <h2>{{ selected_paper.display_title }}</h2>
-            <p class="viewer-subtitle">
-              {{ selected_paper.source_domain or selected_paper.file_name }} · {{ format_bytes(selected_paper.file_size) }}
-              {% if selected_paper.source_url %}
-                · <a href="{{ selected_paper.source_url }}" target="_blank" rel="noreferrer">Open original</a>
-              {% endif %}
-            </p>
+    {% if selected_paper %}
+      {% set tag_groups = namespace(summary=[], overflow=[], seen=[]) %}
+      {% for tag in selected_paper_context.tags %}
+        {% set tag_key = tag.slug or tag.name|lower %}
+        {% if tag_key not in tag_groups.seen %}
+          {% set _ = tag_groups.seen.append(tag_key) %}
+          {% if tag_groups.summary|length < 6 %}
+            {% set _ = tag_groups.summary.append(tag) %}
           {% else %}
-            <p class="eyebrow">原文阅读</p>
-            <h2>原文与标签</h2>
-            <p class="viewer-subtitle">选中一篇论文后，这里会显示原文和已经生成的分析结果。</p>
+            {% set _ = tag_groups.overflow.append(tag) %}
           {% endif %}
+        {% endif %}
+      {% endfor %}
+      {% set summary_tags = tag_groups.summary %}
+      {% set overflow_tags = tag_groups.overflow %}
+      {% set paper_date_editable = not selected_arxiv_markdown_status.arxiv_id %}
+      {% set paper_date_precision = selected_paper.date_precision if selected_paper.date_precision in ['year', 'month', 'day'] else 'month' %}
+      {% set paper_date_year_value = selected_paper.extracted_date[:4] if selected_paper.extracted_date else '' %}
+      {% set paper_date_month_value = selected_paper.extracted_date[:7] if selected_paper.extracted_date and selected_paper.extracted_date|length >= 7 else '' %}
+      {% set paper_date_day_value = selected_paper.extracted_date[:10] if selected_paper.extracted_date and selected_paper.extracted_date|length >= 10 else '' %}
+
+      <header class="item-header">
+        <p class="eyebrow">{{ format_resource_kind(selected_paper.resource_kind) }} · {{ '原文阅读' if selected_tab == 'source' else (selected_prompt.name if selected_prompt else '解读') }}</p>
+        <h2 class="item-title">{{ selected_paper.display_title }}</h2>
+        <p class="item-meta">
+          {{ selected_paper.source_domain or selected_paper.file_name }}
+          {% if selected_paper.extracted_date %} · {{ selected_paper.extracted_date }}{% endif %}
+          · {{ format_bytes(selected_paper.file_size) }}
+        </p>
+        {% if summary_tags %}
+          <div class="item-tags">
+            {% for tag in summary_tags %}
+              <span class="item-tag-chip">#{{ tag.name }}</span>
+            {% endfor %}
+            {% if overflow_tags %}
+              <span class="item-tag-more">+{{ overflow_tags|length }}</span>
+            {% endif %}
+          </div>
+        {% endif %}
+        <div class="item-actions">
+          {% if selected_paper.source_url %}
+            <a class="button-link secondary item-action" href="{{ selected_paper.source_url }}" target="_blank" rel="noreferrer">Open original</a>
+          {% endif %}
+          <button type="button" class="button-link secondary item-action reader-fullscreen-button" data-fullscreen-target="{{ 'source-viewer' if selected_tab == 'source' else 'prompt-viewer' }}">全屏阅读</button>
+          <form action="{{ url_for('done_toggle_route') }}" method="post" class="inline-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="folder" value="{{ current_folder }}">
+            <input type="hidden" name="q" value="{{ query }}">
+            <input type="hidden" name="sort" value="{{ sort_by }}">
+            <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
+            <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
+            <input type="hidden" name="tab" value="{{ selected_tab }}">
+            <button type="submit" class="secondary item-action {% if selected_paper.is_done %}is-active{% endif %}">{% if selected_paper.is_done %}标为未读{% else %}标记已读{% endif %}</button>
+          </form>
+          <form action="{{ url_for('recommend_route') }}" method="post" class="inline-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="folder" value="{{ current_folder }}">
+            <input type="hidden" name="q" value="{{ query }}">
+            <input type="hidden" name="sort" value="{{ sort_by }}">
+            <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
+            <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
+            <input type="hidden" name="tab" value="{{ selected_tab }}">
+            <input type="hidden" name="mode" value="toggle">
+            <button type="submit" class="secondary item-action workspace-recommend-button {% if selected_paper_context.recommended_by_current_user %}is-accent{% endif %}">推荐 · {{ selected_paper_context.recommendation_count }}</button>
+          </form>
+          <button type="button" class="button-link secondary item-action" data-pane-button="right" data-toggle-pane="right">评论 · {{ selected_paper_context.comment_count }}</button>
+          {% if selected_share_payload %}
+            <button
+              type="button"
+              class="button-link secondary item-action workspace-share-button"
+              data-share-button
+              data-share-title="{{ selected_share_payload.title }}"
+              data-share-text="{{ selected_share_payload.text }}"
+              data-share-url="{{ selected_share_payload.url }}"
+              title="分享论文"
+              aria-label="分享论文"
+            ><span data-share-label>分享</span></button>
+          {% endif %}
+          <button type="button" class="icon-button pane-toggle item-action-icon" data-pane-button="center" data-toggle-pane="center" title="折叠阅读区" aria-label="折叠阅读区">
+            <span class="icon-shell" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3.5" y="5" width="17" height="14" rx="3"></rect>
+                <path d="M8 12h8"></path>
+              </svg>
+            </span>
+            <span class="sr-only">切换阅读区</span>
+          </button>
         </div>
-        {% if selected_paper %}
+        {% if viewer_tabs %}
           <div class="viewer-tabs viewer-tabs-inline">
             <a
               class="viewer-tab {% if selected_tab == 'source' %}active{% endif %}"
@@ -207,124 +263,118 @@
             {% endfor %}
           </div>
         {% endif %}
-      </div>
-      <div class="viewer-toolbar-status">
-        {% if selected_paper %}
-          <span class="viewer-status-pill">{{ selected_paper.prompt_result_count }}/{{ active_prompt_count }} 份解读</span>
-        {% else %}
-          <span class="viewer-status-pill">等你打开一篇论文</span>
-        {% endif %}
-        <button type="button" class="icon-button pane-toggle" data-pane-button="center" data-toggle-pane="center" title="折叠阅读区" aria-label="折叠阅读区">
-          <span class="icon-shell" aria-hidden="true">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-              <rect x="3.5" y="5" width="17" height="14" rx="3"></rect>
-              <path d="M8 12h8"></path>
-            </svg>
-          </span>
-          <span class="sr-only">切换阅读区</span>
-        </button>
-      </div>
-    </div>
+      </header>
 
-    {% if selected_paper %}
-      {% set tag_groups = namespace(summary=[], overflow=[], seen=[]) %}
-      {% for tag in selected_paper_context.tags %}
-        {% set tag_key = tag.slug or tag.name|lower %}
-        {% if tag_key not in tag_groups.seen %}
-          {% set _ = tag_groups.seen.append(tag_key) %}
-          {% if tag_groups.summary|length < 4 %}
-            {% set _ = tag_groups.summary.append(tag) %}
-          {% else %}
-            {% set _ = tag_groups.overflow.append(tag) %}
-          {% endif %}
-        {% endif %}
-      {% endfor %}
-      {% set summary_tags = tag_groups.summary %}
-      {% set overflow_tags = tag_groups.overflow %}
-      {% if selected_tab == 'source' %}
-      {% set paper_date_editable = not selected_arxiv_markdown_status.arxiv_id %}
-      {% set paper_date_precision = selected_paper.date_precision if selected_paper.date_precision in ['year', 'month', 'day'] else 'month' %}
-      {% set paper_date_year_value = selected_paper.extracted_date[:4] if selected_paper.extracted_date else '' %}
-      {% set paper_date_month_value = selected_paper.extracted_date[:7] if selected_paper.extracted_date and selected_paper.extracted_date|length >= 7 else '' %}
-      {% set paper_date_day_value = selected_paper.extracted_date[:10] if selected_paper.extracted_date and selected_paper.extracted_date|length >= 10 else '' %}
-      <section class="viewer-context-panel">
-        <div class="viewer-context-bar">
-          <div class="viewer-meta-grid">
-            <div class="viewer-meta-pill viewer-meta-pill-date">
-              <small>论文日期</small>
-              <div class="viewer-meta-value-row">
-                <strong>{{ selected_paper.extracted_date or '无' }}</strong>
-                {% if paper_date_editable %}
-                  <button type="button" class="ghost-button viewer-meta-inline-button" data-paper-date-open>修改</button>
-                {% endif %}
-              </div>
-            </div>
-            <div class="viewer-meta-pill">
-              <small>团队推荐</small>
-              <strong>{{ selected_paper_context.recommendation_count }} 人</strong>
-            </div>
-            <div class="viewer-meta-pill">
-              <small>评论讨论</small>
-              <strong>{{ selected_paper_context.comment_count }} 条</strong>
-            </div>
-            <div class="viewer-meta-pill">
-              <small>论文来源</small>
-              <strong>{{ selected_paper_context.sources|length }} 个</strong>
-            </div>
-            <div class="viewer-meta-pill">
-              <small>共享解读</small>
-              <strong>{{ selected_paper_context.prompt_runs|length }} 份</strong>
-            </div>
-            <div class="viewer-meta-pill">
-              <small>arXiv Markdown</small>
-              <strong>
-                {% if selected_arxiv_markdown_status.cached %}
-                  已缓存
-                {% elif selected_arxiv_markdown_status.available %}
-                  可获取
-                {% else %}
-                  未命中
-                {% endif %}
-              </strong>
-            </div>
-          </div>
+      <details class="item-details">
+        <summary>
+          <span class="item-details-summary-label">详情</span>
+          <span class="item-details-summary-meta">推荐 {{ selected_paper_context.recommendation_count }} 人 · {{ selected_paper_context.comment_count }} 评论 · 来源 {{ selected_paper_context.sources|length }} 个 · 解读 {{ selected_paper_context.prompt_runs|length }} 份</span>
+        </summary>
+        <div class="item-details-body">
+          <section class="item-details-section">
+            <h3>论文日期</h3>
+            <p class="item-details-line">
+              <strong>{{ selected_paper.extracted_date or '未提取到日期' }}</strong>
+              {% if paper_date_editable %}
+                <button type="button" class="ghost-button viewer-meta-inline-button" data-paper-date-open>修改</button>
+              {% endif %}
+            </p>
+          </section>
+
           {% if selected_arxiv_markdown_status.available %}
-            <div class="viewer-tag-row">
-              <div class="viewer-tag-summary">
-                <span class="viewer-tag-empty">
-                  arXiv: {{ selected_arxiv_markdown_status.arxiv_id }}
-                  {% if selected_arxiv_markdown_status.cached and selected_arxiv_markdown_status.fetched_at %}
-                    · 缓存于 {{ selected_arxiv_markdown_status.fetched_at }}
-                  {% endif %}
-                </span>
-              </div>
-              <div class="viewer-tag-actions">
+            <section class="item-details-section">
+              <h3>arXiv Markdown</h3>
+              <p class="item-details-line">
+                arXiv: {{ selected_arxiv_markdown_status.arxiv_id }} ·
+                {% if selected_arxiv_markdown_status.cached %}
+                  已缓存{% if selected_arxiv_markdown_status.fetched_at %}（{{ selected_arxiv_markdown_status.fetched_at }}）{% endif %}
+                {% else %}
+                  可获取
+                {% endif %}
+              </p>
+              <p class="item-details-line">
                 {% if selected_arxiv_markdown_status.source_url %}
                   <a class="ghost-button compact-tag-toggle" href="{{ selected_arxiv_markdown_status.source_url }}" target="_blank" rel="noreferrer">arXiv 页面</a>
                 {% endif %}
                 {% if selected_arxiv_markdown_status.markdown_url %}
                   <a class="ghost-button compact-tag-toggle" href="{{ selected_arxiv_markdown_status.markdown_url }}" target="_blank" rel="noreferrer">markdown.new</a>
                 {% endif %}
-              </div>
-            </div>
+              </p>
+            </section>
           {% endif %}
-          <div class="viewer-tag-row">
-            <div class="viewer-tag-summary">
-              {% for tag in summary_tags %}
-                <div class="team-tag-chip source-{{ tag.source_type }} compact-tag-chip">
-                  <span>#{{ tag.name }}</span>
-                </div>
+
+          <section class="item-details-section">
+            <h3>来源记录</h3>
+            <div class="activity-item-list compact-activity-list">
+              {% for source in selected_paper_context.sources %}
+                <article class="activity-item-card compact">
+                  <header class="activity-item-head">
+                    <strong>{{ format_source_type(source.source_type) }}</strong>
+                  </header>
+                  {% if source.source_url %}
+                    <p><a href="{{ source.source_url }}" target="_blank" rel="noreferrer">{{ source.source_value }}</a></p>
+                  {% else %}
+                    <p>{{ source.source_value }}</p>
+                  {% endif %}
+                  {% if source.source_context %}
+                    <p>{{ source.source_context }}</p>
+                  {% endif %}
+                  {% if source.message_time_iso %}
+                    <small>{{ source.message_time_iso }}</small>
+                  {% endif %}
+                </article>
+              {% else %}
+                <p class="team-empty-copy">这篇论文还没有记录来源信息。</p>
               {% endfor %}
-              {% if overflow_tags %}
-                <button type="button" class="ghost-button compact-tag-toggle" data-collapsible-toggle="tags-inline" data-extra-count="{{ overflow_tags|length }}" aria-expanded="false" title="展开更多标签">+{{ overflow_tags|length }}</button>
-              {% elif not summary_tags %}
-                <span class="viewer-tag-empty">还没有标签</span>
-              {% endif %}
             </div>
-            <div class="viewer-tag-actions">
+          </section>
+
+          <section class="item-details-section">
+            <h3>共享解读</h3>
+            <div class="activity-item-list compact-activity-list">
+              {% for prompt_run in selected_paper_context.prompt_runs %}
+                <article class="activity-item-card compact">
+                  <header class="activity-item-head">
+                    <strong>{{ prompt_run.prompt_name }}</strong>
+                    <small>{{ prompt_run.generated_at or '已生成' }}</small>
+                  </header>
+                  <p>{{ prompt_run.generated_by_display_name or '系统' }} · v{{ prompt_run.prompt_version }} · {{ prompt_run.model }}</p>
+                </article>
+              {% else %}
+                <p class="team-empty-copy">还没有共享解读。可以在上方标签页里直接开始生成。</p>
+              {% endfor %}
+            </div>
+          </section>
+
+          <section class="item-details-section">
+            <h3>标签管理</h3>
+            <div class="team-chip-list compact-chip-list">
+              {% for tag in summary_tags + overflow_tags %}
+                <div class="team-tag-chip source-{{ tag.source_type }}">
+                  <span>#{{ tag.name }}</span>
+                  <small>{{ 'AI Prompt' if tag.source_type == 'ai' else ('AI' if tag.source_type == 'auto' else ('官方' if tag.source_type == 'official' else '手动')) }}</small>
+                  {% if is_admin or (tag.source_type == 'manual' and current_user and current_user.display_name == tag.added_by_display_name) %}
+                    <form action="{{ url_for('tag_remove_route') }}" method="post" class="inline-form">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                      <input type="hidden" name="folder" value="{{ current_folder }}">
+                      <input type="hidden" name="q" value="{{ query }}">
+                      <input type="hidden" name="sort" value="{{ sort_by }}">
+                      <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
+                      <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
+                      <input type="hidden" name="tab" value="{{ selected_tab }}">
+                      <input type="hidden" name="tag_id" value="{{ tag.id }}">
+                      <button type="submit" class="ghost-button">×</button>
+                    </form>
+                  {% endif %}
+                </div>
+              {% else %}
+                <span class="viewer-tag-empty">还没有标签</span>
+              {% endfor %}
+            </div>
+            <div class="viewer-tag-actions item-details-tag-actions">
               {% if is_admin %}
                 <form action="{{ url_for('tag_generate_ai_route') }}" method="post" class="inline-form">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                   <input type="hidden" name="folder" value="{{ current_folder }}">
                   <input type="hidden" name="q" value="{{ query }}">
                   <input type="hidden" name="sort" value="{{ sort_by }}">
@@ -336,14 +386,27 @@
               {% endif %}
               <button type="button" class="ghost-button compact-tag-toggle add-tag-chip" data-collapsible-toggle="tag-editor" aria-expanded="false">添标签</button>
             </div>
-          </div>
+            <div class="viewer-tag-editor" data-collapsible-body="tag-editor" hidden>
+              <form action="{{ url_for('tag_add_route') }}" method="post" class="team-inline-form compact-form viewer-compact-form">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="folder" value="{{ current_folder }}">
+                <input type="hidden" name="q" value="{{ query }}">
+                <input type="hidden" name="sort" value="{{ sort_by }}">
+                <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
+                <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
+                <input type="hidden" name="tab" value="{{ selected_tab }}">
+                <input type="text" name="tag_name" placeholder="输入一个标签，例如：diffusion / robotics">
+                <button type="submit">添加</button>
+              </form>
+            </div>
+          </section>
         </div>
-      </section>
+      </details>
 
       {% if paper_date_editable %}
         <dialog class="paper-date-dialog" data-paper-date-dialog aria-labelledby="paper-date-dialog-title">
           <form action="{{ url_for('paper_date_route') }}" method="post" class="paper-date-dialog-form">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="folder" value="{{ current_folder }}">
             <input type="hidden" name="q" value="{{ query }}">
             <input type="hidden" name="sort" value="{{ sort_by }}">
@@ -392,77 +455,28 @@
         </dialog>
       {% endif %}
 
-      <div class="viewer-inline-tags-panel" data-collapsible-body="tags-inline" hidden>
-        {% if overflow_tags %}
-          <div class="viewer-inline-tags-label">更多标签</div>
-          <div class="team-chip-list compact-chip-list inline-tag-list">
-            {% for tag in overflow_tags %}
-              <div class="team-tag-chip source-{{ tag.source_type }}">
-                <span>#{{ tag.name }}</span>
-                <small>{{ 'AI Prompt' if tag.source_type == 'ai' else ('AI' if tag.source_type == 'auto' else ('官方' if tag.source_type == 'official' else '手动')) }}</small>
-                {% if is_admin or (tag.source_type == 'manual' and current_user and current_user.display_name == tag.added_by_display_name) %}
-                  <form action="{{ url_for('tag_remove_route') }}" method="post" class="inline-form">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <input type="hidden" name="folder" value="{{ current_folder }}">
-                    <input type="hidden" name="q" value="{{ query }}">
-                    <input type="hidden" name="sort" value="{{ sort_by }}">
-                    <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
-                    <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
-                    <input type="hidden" name="tab" value="{{ selected_tab }}">
-                    <input type="hidden" name="tag_id" value="{{ tag.id }}">
-                    <button type="submit" class="ghost-button">×</button>
-                  </form>
-                {% endif %}
-              </div>
-            {% endfor %}
-          </div>
-        {% else %}
-          <p class="team-empty-copy">上面已经显示全部标签了。</p>
-        {% endif %}
-      </div>
-
-      <div class="viewer-tag-editor" data-collapsible-body="tag-editor" hidden>
-        <form action="{{ url_for('tag_add_route') }}" method="post" class="team-inline-form compact-form viewer-compact-form">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <input type="hidden" name="folder" value="{{ current_folder }}">
-          <input type="hidden" name="q" value="{{ query }}">
-          <input type="hidden" name="sort" value="{{ sort_by }}">
-          <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
-          <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
-          <input type="hidden" name="tab" value="{{ selected_tab }}">
-          <input type="text" name="tag_name" placeholder="输入一个标签，例如：diffusion / robotics">
-          <button type="submit">添加</button>
-        </form>
-      </div>
-
-      {% endif %}
-
       <div class="reader-stage" data-center-stage>
         {% if selected_tab == 'source' %}
           {% if selected_paper.preview_kind in ['web', 'markdown'] %}
             <div class="source-viewer source-text-viewer" data-reader-fullscreen="source-viewer">
-              <div class="source-viewer-head">
-                <div>
-                  <strong>{{ format_resource_kind(selected_paper.resource_kind) }}</strong>
-                  <span>
-                    {{ selected_paper.source_domain or 'Markdown snapshot' }}
-                    {% if selected_paper.fetch_status != 'ok' %} · FETCH-{{ selected_paper.fetch_status|upper }}{% endif %}
-                  </span>
-                </div>
-                <div class="prompt-viewer-actions prompt-viewer-actions-compact">
-                  <button type="button" class="button-link secondary reader-fullscreen-button" data-fullscreen-target="source-viewer">全屏阅读</button>
-                  {% if selected_paper.source_url %}
-                    <a class="button-link secondary reader-mini-link" href="{{ selected_paper.source_url }}" target="_blank" rel="noreferrer">Open original</a>
-                  {% endif %}
-                  {% if selected_paper.fetch_status != 'ok' %}
+              {% if selected_paper.fetch_status != 'ok' %}
+                <div class="source-viewer-head">
+                  <div>
+                    <strong>{{ format_resource_kind(selected_paper.resource_kind) }}</strong>
+                    <span>
+                      {{ selected_paper.source_domain or 'Markdown snapshot' }}
+                      · FETCH-{{ selected_paper.fetch_status|upper }}
+                    </span>
+                  </div>
+                  <div class="prompt-viewer-actions prompt-viewer-actions-compact">
                     <form action="{{ url_for('resource_retry_route') }}" method="post" class="inline-form">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                       <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
                       <button type="submit" class="secondary reader-mini-link">Retry fetch</button>
                     </form>
-                  {% endif %}
+                  </div>
                 </div>
-              </div>
+              {% endif %}
               {% if selected_web_html %}
                 <article class="markdown-viewer markdown-render source-viewer-body">{{ selected_web_html }}</article>
               {% else %}
@@ -471,29 +485,10 @@
             </div>
           {% elif selected_paper.preview_kind == 'pdf' %}
             <div class="source-viewer" data-reader-fullscreen="source-viewer">
-              <div class="source-viewer-head">
-                <div>
-                  <strong>原文</strong>
-                  <span>这里会直接显示论文正文</span>
-                </div>
-                <div class="prompt-viewer-actions prompt-viewer-actions-compact">
-                  <button type="button" class="button-link secondary reader-fullscreen-button" data-fullscreen-target="source-viewer">全屏阅读</button>
-                  <a class="button-link secondary reader-mini-link" href="{{ url_for('serve_file', rel_path=selected_paper.rel_path) }}" target="_blank" rel="noreferrer">打开原文件</a>
-                </div>
-              </div>
               <iframe class="main-viewer" title="{{ selected_paper.display_title }}" src="{{ url_for('serve_file', rel_path=selected_paper.rel_path) }}"></iframe>
             </div>
           {% elif selected_paper.preview_kind == 'docx' %}
-            <div class="source-viewer source-text-viewer">
-              <div class="source-viewer-head">
-                <div>
-                  <strong>原文</strong>
-                  <span>这里显示 Word 文档内容</span>
-                </div>
-                <div class="prompt-viewer-actions">
-                  <a class="button-link secondary" href="{{ url_for('serve_file', rel_path=selected_paper.rel_path) }}" target="_blank" rel="noreferrer">打开原文件</a>
-                </div>
-              </div>
+            <div class="source-viewer source-text-viewer" data-reader-fullscreen="source-viewer">
               <div class="source-viewer-body docx-preview wide">
                 {% for paragraph in preview_paragraphs %}
                   <p>{{ paragraph }}</p>
@@ -503,33 +498,16 @@
               </div>
             </div>
           {% elif selected_paper.preview_kind == 'doc' %}
-            <div class="source-viewer source-text-viewer">
-              <div class="source-viewer-head">
-                <div>
-                  <strong>原文</strong>
-                  <span>这里显示 DOC 文件信息</span>
-                </div>
-                <div class="prompt-viewer-actions">
-                  <a class="button-link secondary" href="{{ url_for('serve_file', rel_path=selected_paper.rel_path) }}" target="_blank" rel="noreferrer">打开原文件</a>
-                </div>
-              </div>
+            <div class="source-viewer source-text-viewer" data-reader-fullscreen="source-viewer">
               <div class="source-viewer-body docx-preview wide">
                 <p>现在会先显示 `.doc` 的标题和文件信息；如果想看正文，建议先转成 PDF 或 `.docx`。</p>
               </div>
             </div>
           {% else %}
             <div class="viewer-empty source-viewer source-empty-viewer">
-              <div class="source-viewer-head">
-                <div>
-                  <strong>原文</strong>
-                  <span>这个格式暂时不能直接预览</span>
-                </div>
-                <div class="prompt-viewer-actions">
-                  <a class="button-link secondary" href="{{ url_for('serve_file', rel_path=selected_paper.rel_path) }}" target="_blank" rel="noreferrer">打开原文件</a>
-                </div>
-              </div>
               <h3>当前格式暂不支持预览</h3>
-              <p>你仍然可以点击“打开原文件”查看原始文档。</p>
+              <p>你仍然可以点击「Open original」或下载原文件查看。</p>
+              <p><a class="button-link secondary" href="{{ url_for('serve_file', rel_path=selected_paper.rel_path) }}" target="_blank" rel="noreferrer">打开原文件</a></p>
             </div>
           {% endif %}
         {% elif selected_prompt %}
@@ -547,13 +525,12 @@
                   </span>
                 </div>
                 <div class="prompt-viewer-actions prompt-viewer-actions-compact">
-                  <button type="button" class="button-link secondary reader-fullscreen-button" data-fullscreen-target="prompt-viewer">全屏阅读</button>
                   <a class="button-link secondary reader-mini-link" href="{{ url_for('serve_file', rel_path=selected_paper.rel_path) }}" target="_blank" rel="noreferrer">原文</a>
                   {% if selected_prompt_info and selected_prompt_info.result_rel_path %}
                     <a class="button-link secondary reader-mini-link" href="{{ url_for('serve_file', rel_path=selected_prompt_info.result_rel_path) }}" target="_blank" rel="noreferrer">MD</a>
                   {% endif %}
                   <form action="{{ url_for('prompt_run_route') }}" method="post" class="inline-form">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="folder" value="{{ current_folder }}">
                     <input type="hidden" name="q" value="{{ query }}">
                     <input type="hidden" name="sort" value="{{ sort_by }}">
@@ -582,7 +559,7 @@
                 </div>
               {% endif %}
               <form action="{{ url_for('prompt_run_route') }}" method="post" class="inline-form centered-form">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <input type="hidden" name="folder" value="{{ current_folder }}">
                 <input type="hidden" name="q" value="{{ query }}">
                 <input type="hidden" name="sort" value="{{ sort_by }}">
@@ -597,19 +574,20 @@
       </div>
     {% else %}
       <div class="viewer-empty reader-stage" data-center-stage>
-        <h3>还没有选中文件</h3>
-        <p>左边会显示论文列表，点击任意一篇即可在这里打开。</p>
+        <p class="eyebrow">Reading</p>
+        <h3>从左侧书库选一篇开始读</h3>
+        <p>选中论文后，这里会显示原文和已经生成的解读；讨论和证据在右侧抽屉里，按需打开。</p>
       </div>
     {% endif %}
   </section>
 
   <div class="pane-resizer pane-resizer-right" data-resizer="right" aria-hidden="true"></div>
 
-  <aside class="assistant-pane card layout-pane pane-right" data-pane="right" data-assistant-fullscreen="assistant-pane">
+  <aside class="assistant-pane card layout-pane pane-right" data-pane="right" data-assistant-fullscreen="assistant-pane" aria-label="讨论与证据">
     <div class="pane-top pane-top-compact">
       <div>
         <p class="eyebrow">Evidence</p>
-        <h2>协作记录 / 我爱学 / 一起学</h2>
+        <h2>讨论与笔记</h2>
       </div>
       <div class="pane-top-actions">
         {% if selected_paper %}
@@ -623,15 +601,13 @@
             aria-label="全屏交流"
           >全屏交流</button>
         {% endif %}
-        <button type="button" class="icon-button pane-toggle" data-pane-button="right" data-toggle-pane="right" title="折叠右栏" aria-label="折叠右栏">
+        <button type="button" class="icon-button pane-toggle" data-pane-button="right" data-toggle-pane="right" title="关闭讨论区" aria-label="关闭讨论区">
           <span class="icon-shell" aria-hidden="true">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-              <rect x="3.5" y="5" width="17" height="14" rx="3"></rect>
-              <path d="M14.5 5v14"></path>
-              <path d="M9 8.5L12.5 12 9 15.5"></path>
+              <path d="M6 6l12 12M18 6L6 18"></path>
             </svg>
           </span>
-          <span class="sr-only">切换右栏</span>
+          <span class="sr-only">关闭讨论区</span>
         </button>
       </div>
     </div>
@@ -647,82 +623,9 @@
         <div class="team-paper-card-head compact-head">
           <div>
             <strong>协作记录</strong>
-            <span>推荐只决定是否进入左侧推荐列表；围绕这篇论文的交流统一留在评论区。</span>
+            <span>围绕这篇论文的交流统一留在评论区。</span>
           </div>
-          <span>{{ selected_paper_context.recommendation_count }} 推荐 / {{ selected_paper_context.comment_count }} 评</span>
-        </div>
-
-        <div class="activity-summary-strip">
-          <div class="activity-stat-card">
-            <small>团队推荐</small>
-            <strong>{{ selected_paper_context.recommendation_count }}</strong>
-            <span>决定是否进入左侧推荐列表</span>
-          </div>
-          <div class="activity-stat-card">
-            <small>共享解读</small>
-            <strong>{{ selected_paper_context.prompt_runs|length }}</strong>
-            <span>能直接复用的 Prompt 结果</span>
-          </div>
-          <div class="activity-stat-card">
-            <small>评论讨论</small>
-            <strong>{{ selected_paper_context.comment_count }}</strong>
-            <span>围绕判断、疑问和结论留言</span>
-          </div>
-        </div>
-
-        <div class="activity-section activity-split-section">
-          <div>
-            <div class="activity-section-head">
-              <div>
-                <strong>来源</strong>
-                <p>快速确认论文来自哪里。</p>
-              </div>
-            </div>
-            <div class="activity-item-list compact-activity-list">
-              {% for source in selected_paper_context.sources %}
-                <article class="activity-item-card compact">
-                  <header class="activity-item-head">
-                    <strong>{{ format_source_type(source.source_type) }}</strong>
-                  </header>
-                  {% if source.source_url %}
-                    <p><a href="{{ source.source_url }}" target="_blank" rel="noreferrer">{{ source.source_value }}</a></p>
-                  {% else %}
-                    <p>{{ source.source_value }}</p>
-                  {% endif %}
-                  {% if source.source_context %}
-                    <p>{{ source.source_context }}</p>
-                  {% endif %}
-                  {% if source.message_time_iso %}
-                    <small>{{ source.message_time_iso }}</small>
-                  {% endif %}
-                </article>
-              {% else %}
-                <p class="team-empty-copy">这篇论文还没有记录来源信息。</p>
-              {% endfor %}
-            </div>
-          </div>
-
-          <div>
-            <div class="activity-section-head">
-              <div>
-                <strong>共享解读</strong>
-                <p>已经生成过的结果可以直接复用。</p>
-              </div>
-            </div>
-            <div class="activity-item-list compact-activity-list">
-              {% for prompt_run in selected_paper_context.prompt_runs %}
-                <article class="activity-item-card compact">
-                  <header class="activity-item-head">
-                    <strong>{{ prompt_run.prompt_name }}</strong>
-                    <small>{{ prompt_run.generated_at or '已生成' }}</small>
-                  </header>
-                  <p>{{ prompt_run.generated_by_display_name or '系统' }} · v{{ prompt_run.prompt_version }} · {{ prompt_run.model }}</p>
-                </article>
-              {% else %}
-                <p class="team-empty-copy">还没有共享解读。可以在中间标签页里直接开始生成。</p>
-              {% endfor %}
-            </div>
-          </div>
+          <span class="activity-count-line">{{ selected_paper_context.recommendation_count }} 推荐 / {{ selected_paper_context.comment_count }} 评</span>
         </div>
 
         <div class="activity-section">
@@ -733,7 +636,7 @@
             </div>
           </div>
           <form action="{{ url_for('comment_route') }}" method="post" class="team-inline-form activity-comment-form">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="folder" value="{{ current_folder }}">
             <input type="hidden" name="q" value="{{ query }}">
             <input type="hidden" name="sort" value="{{ sort_by }}">
@@ -791,7 +694,7 @@
           </aside>
         </div>
         <form action="{{ url_for('chat_send_route') }}" method="post" class="team-inline-form" data-chat-form>
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="folder" value="{{ current_folder }}">
           <input type="hidden" name="q" value="{{ query }}">
           <input type="hidden" name="sort" value="{{ sort_by }}">
@@ -848,7 +751,7 @@
           </aside>
         </div>
         <form action="{{ url_for('chat_send_route') }}" method="post" class="team-inline-form" data-chat-form>
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="folder" value="{{ current_folder }}">
           <input type="hidden" name="q" value="{{ query }}">
           <input type="hidden" name="sort" value="{{ sort_by }}">
@@ -863,131 +766,17 @@
     {% else %}
       <div class="assistant-empty">
         <strong>还没有选中文件</strong>
-        <p>选中一篇论文后，右边会显示“协作记录”、“我爱学”和“一起学”三块区域。</p>
+        <p>选中一篇论文后，这里会显示“协作记录”、“我爱学”和“一起学”。</p>
       </div>
     {% endif %}
   </aside>
-  <button type="button" class="pane-restore-rail pane-restore-left" data-restore-pane="left" data-toggle-pane="left" title="展开导航栏" aria-label="展开导航栏">
-    <span class="pane-restore-glyph" aria-hidden="true">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-        <rect x="4" y="5" width="16" height="14" rx="3"></rect>
-        <path d="M10 5v14"></path>
-        <path d="M16 8.5L12.5 12 16 15.5"></path>
-      </svg>
-    </span>
-    <span class="sr-only">展开导航栏</span>
-  </button>
-  <button type="button" class="pane-restore-rail pane-restore-right" data-restore-pane="right" data-toggle-pane="right" title="展开右栏" aria-label="展开右栏">
-    <span class="pane-restore-glyph" aria-hidden="true">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-        <rect x="4" y="5" width="16" height="14" rx="3"></rect>
-        <path d="M14 5v14"></path>
-        <path d="M8 8.5L11.5 12 8 15.5"></path>
-      </svg>
-    </span>
-    <span class="sr-only">展开右栏</span>
-  </button>
 </section>
 
-<div class="workspace-orbit-dock" role="toolbar" aria-label="工作区快捷操作">
-  <button type="button" class="icon-button workspace-dock-button" data-pane-button="left" data-toggle-pane="left" title="切换导航栏" aria-label="切换导航栏">
-    <span class="icon-shell" aria-hidden="true">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-        <rect x="3.5" y="5" width="17" height="14" rx="3"></rect>
-        <path d="M9.5 5v14"></path>
-      </svg>
-    </span>
-    <span class="sr-only">切换导航栏</span>
-  </button>
-  <button type="button" class="icon-button workspace-dock-button" data-pane-button="center" data-toggle-pane="center" title="最小化或展开阅读区" aria-label="最小化或展开阅读区">
-    <span class="icon-shell" aria-hidden="true">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-        <rect x="3.5" y="5" width="17" height="14" rx="3"></rect>
-        <path d="M8 12h8"></path>
-      </svg>
-    </span>
-    <span class="sr-only">切换中栏</span>
-  </button>
-  <button type="button" class="icon-button workspace-dock-button" data-pane-button="right" data-toggle-pane="right" title="切换右栏" aria-label="切换右栏">
-    <span class="icon-shell" aria-hidden="true">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-        <rect x="3.5" y="5" width="17" height="14" rx="3"></rect>
-        <path d="M14.5 5v14"></path>
-      </svg>
-    </span>
-    <span class="sr-only">切换右栏</span>
-  </button>
-  {% if selected_paper %}
-    <form action="{{ url_for('recommend_route') }}" method="post" class="inline-form workspace-dock-form">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <input type="hidden" name="folder" value="{{ current_folder }}">
-      <input type="hidden" name="q" value="{{ query }}">
-      <input type="hidden" name="sort" value="{{ sort_by }}">
-      <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
-      <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
-      <input type="hidden" name="tab" value="{{ selected_tab }}">
-      <input type="hidden" name="mode" value="toggle">
-      <button type="submit" class="icon-button workspace-dock-button workspace-recommend-button {% if selected_paper_context.recommended_by_current_user %}is-accent{% endif %}" title="{% if selected_paper_context.recommended_by_current_user %}取消推荐{% else %}加入推荐{% endif %}" aria-label="{% if selected_paper_context.recommended_by_current_user %}取消推荐{% else %}加入推荐{% endif %}">
-        <span class="icon-shell" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M12 20s-7-4.35-7-9.5S8.12 3 12 7c3.88-4 7 0.15 7 3.5S12 20 12 20Z"></path>
-          </svg>
-        </span>
-        <span class="workspace-recommend-count" aria-hidden="true">{{ selected_paper_context.recommendation_count }}</span>
-        <span class="sr-only">推荐 {{ selected_paper_context.recommendation_count }}</span>
-      </button>
-    </form>
-    {% if selected_share_payload %}
-      <button
-        type="button"
-        class="icon-button workspace-dock-button workspace-share-button"
-        data-share-button
-        data-share-title="{{ selected_share_payload.title }}"
-        data-share-text="{{ selected_share_payload.text }}"
-        data-share-url="{{ selected_share_payload.url }}"
-        title="分享论文"
-        aria-label="分享论文"
-      >
-        <span class="icon-shell" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="18" cy="5" r="2.5"></circle>
-            <circle cx="6" cy="12" r="2.5"></circle>
-            <circle cx="18" cy="19" r="2.5"></circle>
-            <path d="M8.2 11l7.6-4.2"></path>
-            <path d="M8.2 13l7.6 4.2"></path>
-          </svg>
-        </span>
-        <span class="sr-only" data-share-label>分享论文</span>
-      </button>
-    {% endif %}
-    <form action="{{ url_for('done_toggle_route') }}" method="post" class="inline-form workspace-dock-form">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <input type="hidden" name="folder" value="{{ current_folder }}">
-      <input type="hidden" name="q" value="{{ query }}">
-      <input type="hidden" name="sort" value="{{ sort_by }}">
-      <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
-      <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
-      <input type="hidden" name="tab" value="{{ selected_tab }}">
-      <button type="submit" class="icon-button workspace-dock-button {% if selected_paper.is_done %}is-active{% endif %}" title="{% if selected_paper.is_done %}恢复为未读{% else %}标记已读{% endif %}" aria-label="{% if selected_paper.is_done %}恢复为未读{% else %}标记已读{% endif %}">
-        <span class="icon-shell" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M5.5 12.5l4 4L18.5 7.5"></path>
-          </svg>
-        </span>
-        <span class="sr-only">标记已读</span>
-      </button>
-    </form>
-  {% endif %}
-</div>
-
-<button type="button" id="settings-orb" class="settings-orb" title="拖动或打开控制中心" aria-label="拖动或打开控制中心" aria-controls="settings-drawer" aria-expanded="false">
-  <span class="settings-orb-core">
-    <img src="{{ url_for('static', filename='logo-mark.svg') }}" alt="Paper Reader logo">
-  </span>
-  {% if current_user %}
-    <span class="settings-orb-badge">{{ render_avatar(avatar_url_for(current_user), avatar_initials(current_user.display_name), 'avatar avatar-badge') }}</span>
-  {% endif %}
-</button>
+<nav class="mobile-tab-bar" aria-label="移动端主导航">
+  <button type="button" class="mobile-tab-button" data-mobile-tab="library" aria-pressed="false">书库</button>
+  <button type="button" class="mobile-tab-button" data-mobile-tab="reader" aria-pressed="false">阅读</button>
+  <button type="button" class="mobile-tab-button" data-mobile-tab="chat" aria-pressed="false">讨论</button>
+</nav>
 
 <section class="bottom-tools card settings-drawer" id="settings-drawer" data-settings-drawer role="dialog" aria-modal="false" aria-labelledby="settings-drawer-title" aria-hidden="true" tabindex="-1" inert>
   <button type="button" class="settings-resize-handle" data-settings-resize title="拖动调整常用操作宽度" aria-label="拖动调整常用操作宽度"></button>
@@ -998,8 +787,8 @@
     </div>
     <div class="tools-head-actions">
       <button type="button" class="button-link secondary" data-close-settings>关闭</button>
-      <a class="button-link secondary" href="{{ url_for('sources_index') }}" target="_blank" rel="noreferrer">查看来源归档</a>
-      <a class="button-link secondary" href="{{ url_for('insights_index') }}" target="_blank" rel="noreferrer">打开 Insights 页面</a>
+      <a class="button-link secondary" href="{{ url_for('sources_index') }}">查看来源归档</a>
+      <a class="button-link secondary" href="{{ url_for('insights_index') }}">打开 Insights 页面</a>
     </div>
   </div>
   {% if current_user %}
@@ -1013,7 +802,7 @@
       </div>
       <div class="settings-user-actions">
         <form class="settings-avatar-form" action="{{ url_for('profile_avatar_route') }}" method="post" enctype="multipart/form-data">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="folder" value="{{ current_folder }}">
           <input type="hidden" name="q" value="{{ query }}">
           <input type="hidden" name="sort" value="{{ sort_by }}">
@@ -1029,76 +818,12 @@
       </div>
     </div>
   {% endif %}
-  <div class="drawer-quick-actions drawer-quick-actions-icons">
-    <button type="button" class="icon-button" data-pane-button="left" data-toggle-pane="left" title="切换导航栏" aria-label="切换导航栏">
-      <span class="icon-shell" aria-hidden="true">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="3.5" y="5" width="17" height="14" rx="3"></rect>
-          <path d="M9.5 5v14"></path>
-        </svg>
-      </span>
-      <span>导航栏</span>
-    </button>
-    <button type="button" class="icon-button" data-pane-button="center" data-toggle-pane="center" title="切换中栏" aria-label="切换中栏">
-      <span class="icon-shell" aria-hidden="true">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="3.5" y="5" width="17" height="14" rx="3"></rect>
-          <path d="M8 12h8"></path>
-        </svg>
-      </span>
-      <span>中栏</span>
-    </button>
-    <button type="button" class="icon-button" data-pane-button="right" data-toggle-pane="right" title="切换右栏" aria-label="切换右栏">
-      <span class="icon-shell" aria-hidden="true">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="3.5" y="5" width="17" height="14" rx="3"></rect>
-          <path d="M14.5 5v14"></path>
-        </svg>
-      </span>
-      <span>右栏</span>
-    </button>
-  </div>
-
-  <details class="tool-panel">
-    <summary>检索与排序</summary>
-    <form class="tool-grid" action="{{ url_for('index') }}" method="get">
-      <input type="hidden" name="paper" value="{{ selected_paper.rel_path if selected_paper else '' }}">
-      <input type="hidden" name="tab" value="{{ selected_tab }}">
-      <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
-      <label>
-        <span>搜索标题 / 文件名</span>
-        <input type="search" name="q" value="{{ query }}" placeholder="例如：DeepSeek 或 2501.12948">
-      </label>
-      <label>
-        <span>浏览文件夹</span>
-        <select name="folder">
-          <option value="" {% if not current_folder %}selected{% endif %}>全部文件夹</option>
-          {% for folder in folders %}
-            {% if folder %}
-              <option value="{{ folder }}" {% if current_folder == folder %}selected{% endif %}>{{ folder }}</option>
-            {% endif %}
-          {% endfor %}
-        </select>
-      </label>
-      <label>
-        <span>排序方式</span>
-        <select name="sort">
-          <option value="date_desc" {% if sort_by == 'date_desc' %}selected{% endif %}>按日期从新到旧</option>
-          <option value="date_asc" {% if sort_by == 'date_asc' %}selected{% endif %}>按日期从旧到新</option>
-          <option value="title" {% if sort_by == 'title' %}selected{% endif %}>按标题 / 文件名</option>
-        </select>
-      </label>
-      <div class="tool-actions">
-        <button type="submit">应用条件</button>
-      </div>
-    </form>
-  </details>
 
   <details class="tool-panel">
     <summary>上传与导入</summary>
     <div class="stacked-tool-grid">
       <form class="tool-grid upload-form-grid" id="upload-form" action="{{ url_for('upload') }}" method="post" enctype="multipart/form-data" data-upload-endpoint="{{ url_for('upload_file') }}">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="folder" value="{{ current_folder }}">
         <input type="hidden" name="q" value="{{ query }}">
         <input type="hidden" name="sort" value="{{ sort_by }}">
@@ -1152,7 +877,7 @@
       </section>
 
       <form class="tool-grid" action="{{ url_for('import_link_route') }}" method="post">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="folder" value="{{ current_folder }}">
         <input type="hidden" name="q" value="{{ query }}">
         <input type="hidden" name="sort" value="{{ sort_by }}">
@@ -1173,7 +898,7 @@
 
       {% if is_admin %}
         <form class="tool-grid" action="{{ url_for('create_folder_route') }}" method="post">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="folder" value="{{ current_folder }}">
           <input type="hidden" name="q" value="{{ query }}">
           <input type="hidden" name="sort" value="{{ sort_by }}">
@@ -1203,7 +928,7 @@
     </div>
   </details>
 
-  <details class="tool-panel" open>
+  <details class="tool-panel">
     <summary>后台任务</summary>
     <div class="jobs-panel-head">
       <div class="jobs-controls">
@@ -1238,7 +963,7 @@
     {% elif selected_paper %}
       <div class="stacked-tool-grid">
         <form class="tool-grid" action="{{ url_for('rename_route') }}" method="post">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="folder" value="{{ current_folder }}">
           <input type="hidden" name="q" value="{{ query }}">
           <input type="hidden" name="sort" value="{{ sort_by }}">
@@ -1260,7 +985,7 @@
         </form>
 
         <form class="tool-grid danger-grid" action="{{ url_for('delete_route') }}" method="post">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="folder" value="{{ current_folder }}">
           <input type="hidden" name="q" value="{{ query }}">
           <input type="hidden" name="sort" value="{{ sort_by }}">
@@ -1277,7 +1002,7 @@
         </form>
 
         <form class="tool-grid compact-actions-grid" action="{{ url_for('reindex') }}" method="post">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="folder" value="{{ current_folder }}">
           <input type="hidden" name="q" value="{{ query }}">
           <input type="hidden" name="sort" value="{{ sort_by }}">
@@ -1303,7 +1028,7 @@
         {% if is_admin %}
           <div class="jobs-control-actions">
             <form class="jobs-config-form" action="{{ url_for('jobs_config_route') }}" method="post">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <input type="hidden" name="folder" value="{{ current_folder }}">
               <input type="hidden" name="q" value="{{ query }}">
               <input type="hidden" name="sort" value="{{ sort_by }}">
@@ -1317,7 +1042,7 @@
               <button type="submit" class="secondary">保存</button>
             </form>
             <form action="{{ url_for('jobs_stop_all_route') }}" method="post">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <input type="hidden" name="folder" value="{{ current_folder }}">
               <input type="hidden" name="q" value="{{ query }}">
               <input type="hidden" name="sort" value="{{ sort_by }}">
@@ -1475,7 +1200,7 @@
       const chatStreamUrl = "{{ url_for('chat_send_stream_route') }}";
       const layoutRoot = document.querySelector("[data-layout-root]");
       const centerStage = document.querySelector("[data-center-stage]");
-      const settingsOrb = document.getElementById("settings-orb");
+      const settingsOrb = document.getElementById("settings-open-button");
       const settingsDrawer = document.querySelector("[data-settings-drawer]");
       const closeSettingsButton = settingsDrawer ? settingsDrawer.querySelector("[data-close-settings]") : null;
       const settingsResizeHandle = settingsDrawer ? settingsDrawer.querySelector("[data-settings-resize]") : null;
@@ -1502,20 +1227,17 @@
         center: document.querySelector('[data-pane="center"]'),
         right: document.querySelector('[data-pane="right"]'),
       };
-      const layoutStateKey = "paper-reader-layout-v4";
+      const layoutStateKey = "paper-reader-layout-v5";
       const collapsibleStateKey = "paper-reader-collapsible-v1";
       const chatPanelStateKey = "paper-reader-chat-panel-v2";
       const sidebarPanelStateKey = "paper-reader-sidebar-panel-v1";
       const defaultLayoutState = {
-        leftWidth: 264,
-        rightWidth: 388,
+        leftWidth: 288,
+        rightWidth: 392,
         leftCollapsed: false,
         centerCollapsed: false,
-        rightCollapsed: false,
+        rightCollapsed: true,
         settingsOpen: false,
-        orbX: null,
-        orbY: null,
-        orbMoved: false,
         settingsWidth: 560,
         chatOutlineWidth: 260,
       };
@@ -1766,7 +1488,7 @@
         paneStateButtons.forEach((button) => {
           const pane = button.dataset.paneButton || button.dataset.togglePane || "left";
           const collapsed = isPaneCollapsed(pane);
-          const noun = pane === "left" ? "导航栏" : pane === "center" ? "阅读区" : "右栏";
+          const noun = pane === "left" ? "导航栏" : pane === "center" ? "阅读区" : "讨论区";
           button.classList.toggle("is-collapsed", collapsed);
           button.setAttribute("aria-pressed", collapsed ? "false" : "true");
           button.setAttribute("title", `${collapsed ? "展开" : "折叠"}${noun}`);
@@ -1782,28 +1504,6 @@
           pane.toggleAttribute("inert", collapsed);
           pane.setAttribute("aria-hidden", collapsed ? "true" : "false");
         });
-      }
-
-      function applyOrbPosition() {
-        if (!settingsOrb) return;
-        if (!layoutState.orbMoved) {
-          settingsOrb.style.left = "";
-          settingsOrb.style.top = "";
-          settingsOrb.style.right = "";
-          settingsOrb.style.bottom = "";
-          settingsOrb.classList.remove("is-custom-position");
-          return;
-        }
-        const margin = window.innerWidth <= 820 ? 10 : 16;
-        const width = settingsOrb.offsetWidth || 62;
-        const height = settingsOrb.offsetHeight || 62;
-        layoutState.orbX = clamp(layoutState.orbX ?? (window.innerWidth - width - margin), margin, window.innerWidth - width - margin);
-        layoutState.orbY = clamp(layoutState.orbY ?? margin, margin, window.innerHeight - height - margin);
-        settingsOrb.style.left = `${layoutState.orbX}px`;
-        settingsOrb.style.top = `${layoutState.orbY}px`;
-        settingsOrb.style.right = "auto";
-        settingsOrb.style.bottom = "auto";
-        settingsOrb.classList.add("is-custom-position");
       }
 
       function activeChatLayoutWidth() {
@@ -1866,7 +1566,6 @@
         applyChatOutlineWidth();
         syncPaneRegions();
         syncPaneButtons();
-        applyOrbPosition();
       }
 
       function updatePaneState(pane, nextValue) {
@@ -1882,6 +1581,71 @@
         if (pane === "center") updatePaneState("center", !layoutState.centerCollapsed);
         if (pane === "right") updatePaneState("right", !layoutState.rightCollapsed);
       }
+
+      const mobileLayoutQuery = window.matchMedia("(max-width: 999.98px)");
+      const desktopDockQuery = window.matchMedia("(min-width: 1600px)");
+      const mobileTabButtons = Array.from(document.querySelectorAll("[data-mobile-tab]"));
+      const mobileViewKey = "paper-reader-mobile-view-v1";
+      let mobileView = null;
+
+      function dockedRightPane() {
+        return desktopDockQuery.matches;
+      }
+
+      function setMobileView(view, { persist = true } = {}) {
+        mobileView = view;
+        document.body.classList.remove("mobile-view-library", "mobile-view-reader", "mobile-view-chat");
+        if (mobileLayoutQuery.matches) {
+          document.body.classList.add(`mobile-view-${view}`);
+        }
+        mobileTabButtons.forEach((button) => {
+          const active = button.dataset.mobileTab === view;
+          button.classList.toggle("is-active", active);
+          button.setAttribute("aria-pressed", active ? "true" : "false");
+        });
+        if (persist) persistSimpleValue(mobileViewKey, view);
+      }
+
+      function initializeMobileTabs() {
+        if (!mobileTabButtons.length) return;
+        mobileTabButtons.forEach((button) => {
+          button.addEventListener("click", () => {
+            const view = button.dataset.mobileTab || "reader";
+            if (view === "library") updatePaneState("left", false);
+            if (view === "chat") updatePaneState("right", false);
+            setMobileView(view);
+          });
+        });
+        const applyInitial = () => {
+          const stored = loadSimpleValue(mobileViewKey, "");
+          const fallback = selectedPaper ? "reader" : "library";
+          const view = stored || fallback;
+          if (mobileLayoutQuery.matches) {
+            if (view === "chat") updatePaneState("right", false);
+            if (view === "library") updatePaneState("left", false);
+          }
+          setMobileView(view, { persist: false });
+        };
+        applyInitial();
+        if (typeof mobileLayoutQuery.addEventListener === "function") {
+          mobileLayoutQuery.addEventListener("change", applyInitial);
+        }
+      }
+
+      initializeMobileTabs();
+
+      // Evidence drawer: on non-docked widths it overlays the reader, so a click
+      // outside the drawer (and outside its toggle buttons) closes it again.
+      document.addEventListener("click", (event) => {
+        if (layoutState.rightCollapsed || dockedRightPane() || mobileLayoutQuery.matches) return;
+        const pane = paneRegions.right;
+        if (!pane) return;
+        const target = event.target;
+        if (!(target instanceof Node)) return;
+        if (pane.contains(target)) return;
+        if (target.closest && target.closest('[data-toggle-pane="right"]')) return;
+        updatePaneState("right", true);
+      });
 
       function setSettingsOpen(nextValue) {
         if (nextValue === layoutState.settingsOpen) return;
@@ -1909,71 +1673,21 @@
       paneToggleButtons.forEach((button) => {
         button.addEventListener("click", () => {
           togglePane(button.dataset.togglePane || "left");
+          if (mobileLayoutQuery.matches) {
+            if (!layoutState.rightCollapsed && mobileView !== "chat") {
+              setMobileView("chat");
+            } else if (!layoutState.leftCollapsed && mobileView !== "library" && layoutState.rightCollapsed) {
+              setMobileView("library");
+            } else if (layoutState.leftCollapsed && layoutState.rightCollapsed && mobileView !== "reader") {
+              setMobileView("reader");
+            }
+          }
         });
       });
 
       if (settingsOrb) {
-        let orbDragState = null;
-        let suppressOrbClick = false;
-
-        function stopOrbDrag(event) {
-          if (!orbDragState) return;
-          if (event && settingsOrb.hasPointerCapture(orbDragState.pointerId)) {
-            settingsOrb.releasePointerCapture(orbDragState.pointerId);
-          }
-          settingsOrb.classList.remove("dragging");
-          if (orbDragState.dragged) {
-            suppressOrbClick = true;
-            window.setTimeout(() => {
-              suppressOrbClick = false;
-            }, 0);
-            persistLayoutState();
-          }
-          orbDragState = null;
-        }
-
-        settingsOrb.addEventListener("pointerdown", (event) => {
-          if (event.button !== 0) return;
-          const rect = settingsOrb.getBoundingClientRect();
-          orbDragState = {
-            pointerId: event.pointerId,
-            startX: event.clientX,
-            startY: event.clientY,
-            originX: rect.left,
-            originY: rect.top,
-            dragged: false,
-          };
-          settingsOrb.setPointerCapture(event.pointerId);
-        });
-
-        settingsOrb.addEventListener("pointermove", (event) => {
-          if (!orbDragState || event.pointerId !== orbDragState.pointerId) return;
-          const deltaX = event.clientX - orbDragState.startX;
-          const deltaY = event.clientY - orbDragState.startY;
-          if (!orbDragState.dragged && Math.hypot(deltaX, deltaY) < 6) return;
-          orbDragState.dragged = true;
-          layoutState.orbMoved = true;
-          layoutState.orbX = orbDragState.originX + deltaX;
-          layoutState.orbY = orbDragState.originY + deltaY;
-          settingsOrb.classList.add("dragging");
-          applyLayoutState();
-        });
-
-        settingsOrb.addEventListener("pointerup", stopOrbDrag);
-        settingsOrb.addEventListener("pointercancel", stopOrbDrag);
-        settingsOrb.addEventListener("click", (event) => {
-          if (suppressOrbClick) {
-            event.preventDefault();
-            return;
-          }
+        settingsOrb.addEventListener("click", () => {
           setSettingsOpen(!layoutState.settingsOpen);
-        });
-        settingsOrb.addEventListener("dblclick", () => {
-          layoutState.orbMoved = false;
-          layoutState.orbX = null;
-          layoutState.orbY = null;
-          applyLayoutState();
-          persistLayoutState();
         });
       }
       if (closeSettingsButton) {
@@ -2059,6 +1773,10 @@
         }
         if (event.key === "Escape" && layoutState.settingsOpen) {
           setSettingsOpen(false);
+          return;
+        }
+        if (event.key === "Escape" && !layoutState.rightCollapsed && !dockedRightPane()) {
+          updatePaneState("right", true);
         }
       });
       document.addEventListener("click", (event) => {
@@ -2070,9 +1788,6 @@
       });
       window.addEventListener("resize", () => {
         applyChatOutlineWidth();
-        if (!settingsOrb || !layoutState.orbMoved) return;
-        applyLayoutState();
-        persistLayoutState();
       });
 
       function bindPaneResizer(handle) {
@@ -2426,19 +2141,12 @@
         row.dataset.yearKey = paper.year_key || "unknown";
         row.dataset.monthKey = paper.month_key || "unknown";
         row.innerHTML = `
-          <div class="paper-row-top">
+          <span class="paper-row-top">
             <span class="paper-row-type">${escapeHtml(paper.extension)}</span>
             ${paper.extracted_date ? `<span class="paper-row-date">${escapeHtml(paper.extracted_date)}</span>` : ""}
-          </div>
+          </span>
           <strong class="paper-row-title">${escapeHtml(paper.display_title)}</strong>
-          <span class="paper-row-file">${escapeHtml(paper.file_name)}</span>
-          <div class="paper-row-bottom">
-            <div class="paper-row-flags">
-              ${paper.folder ? `<span class="paper-row-folder">${escapeHtml(paper.folder)}</span>` : ""}
-              ${paper.is_done ? '<span class="paper-row-done">已读</span>' : ""}
-            </div>
-            <span class="paper-row-summary">${paper.prompt_result_count}/${paper.active_prompt_count}</span>
-          </div>
+          <span class="paper-row-file">${escapeHtml(paper.file_name)}${paper.folder ? ` · ${escapeHtml(paper.folder)}` : ""}${paper.is_done ? " · 已读" : ""}</span>
         `;
         return row;
       }

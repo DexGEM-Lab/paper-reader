@@ -1948,3 +1948,455 @@ table {
 .page-shell > .flash-stack {
   margin: 8px 16px 0;
 }
+
+/* ==========================================================
+   Stage M — serene two-pane reader + on-demand evidence drawer
+   ========================================================== */
+
+/* Default grid: library + reader only. The evidence pane is an overlay
+   drawer below 1600px and docks as a third column at >=1600px. */
+.workspace-shell.tri-workspace {
+  grid-template-columns: var(--left-pane-width, 288px) var(--left-resizer-width, 10px) minmax(0, 1fr);
+  height: calc(100dvh - var(--topbar-height));
+}
+
+.pane-resizer-right {
+  display: none;
+}
+
+@media (min-width: 1600px) {
+  .workspace-shell.tri-workspace:not(.right-collapsed) {
+    grid-template-columns: var(--left-pane-width, 288px) var(--left-resizer-width, 10px) minmax(0, 1fr) var(--right-resizer-width, 10px) var(--right-pane-width, 392px);
+  }
+  .workspace-shell.tri-workspace:not(.right-collapsed) .pane-resizer-right {
+    display: block;
+  }
+}
+
+@media (max-width: 1599.98px) {
+  .workspace-shell.tri-workspace .pane-right {
+    position: fixed;
+    top: var(--topbar-height);
+    right: 0;
+    bottom: 0;
+    width: min(400px, 94vw);
+    height: auto;
+    z-index: 54;
+    background: var(--paper);
+    border-left: var(--border-strong);
+  }
+}
+
+/* ---------------------------------------------------------- item header */
+
+.pane-center {
+  padding: 0;
+  gap: 0;
+}
+
+.item-header {
+  padding: 16px 24px 0;
+  border-bottom: var(--border-quiet);
+  display: grid;
+  gap: 8px;
+}
+
+.item-header .eyebrow {
+  margin: 0;
+}
+
+.item-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: clamp(20px, 1.6vw, 26px);
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: -0.015em;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.item-meta {
+  margin: 0;
+  font-size: var(--text-ui);
+  line-height: 1.5;
+  color: var(--ink-60);
+  overflow-wrap: anywhere;
+}
+
+.item-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.item-tag-chip {
+  font-size: var(--text-label);
+  font-weight: 600;
+  color: var(--ink-60);
+  padding: 1px 8px;
+  border: var(--border-quiet);
+  border-radius: var(--radius-control);
+  background: transparent;
+}
+
+.item-tag-more {
+  font-size: var(--text-label);
+  color: var(--ink-30);
+  font-variant-numeric: tabular-nums;
+}
+
+.item-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0 0;
+}
+
+.item-actions .inline-form {
+  display: inline-flex;
+  margin: 0;
+}
+
+.item-action {
+  min-height: 34px;
+  padding: 5px 12px;
+  font-size: var(--text-label);
+  white-space: nowrap;
+}
+
+.item-action.is-accent {
+  border-color: var(--sapphire);
+  color: var(--sapphire);
+}
+
+.item-action.is-active {
+  box-shadow: inset 0 -2px 0 var(--sapphire);
+}
+
+.item-action-icon {
+  margin-left: auto;
+}
+
+/* Quiet segmented tabs under the header */
+.item-header .viewer-tabs-inline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
+  margin-top: 4px;
+}
+
+.item-header .viewer-tab {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 8px 12px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink-60);
+  font-size: var(--text-ui);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.item-header .viewer-tab small {
+  font-size: var(--text-meta);
+  color: var(--ink-30);
+  font-weight: 400;
+}
+
+.item-header .viewer-tab:hover {
+  color: var(--ink);
+  background: transparent;
+}
+
+.item-header .viewer-tab.active {
+  color: var(--ink);
+  border-bottom-color: var(--sapphire);
+}
+
+.item-header .viewer-tab.pending small {
+  color: var(--ink-30);
+}
+
+/* ---------------------------------------------------------- 详情 disclosure */
+
+.item-details {
+  border-bottom: var(--border-quiet);
+  padding: 0 24px;
+}
+
+.item-details > summary {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 8px 0;
+  cursor: pointer;
+  list-style: none;
+  font-size: var(--text-label);
+}
+
+.item-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.item-details-summary-label {
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.item-details > summary .item-details-summary-label::after {
+  content: " +";
+  color: var(--sapphire);
+  font-weight: 600;
+}
+
+.item-details[open] > summary .item-details-summary-label::after {
+  content: " −";
+}
+
+.item-details-summary-meta {
+  color: var(--ink-60);
+  font-variant-numeric: tabular-nums;
+}
+
+.item-details-body {
+  display: grid;
+  gap: 16px;
+  padding: 8px 0 20px;
+}
+
+.item-details-section {
+  border-top: var(--border-quiet);
+  padding-top: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.item-details-section h3 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--text-meta);
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-60);
+}
+
+.item-details-line {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: var(--text-ui);
+  color: var(--ink);
+}
+
+.item-details-tag-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* ---------------------------------------------------------- library column */
+
+.sidebar-pane .pane-top h2 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 18px;
+  line-height: 1.2;
+}
+
+/* One compact filter row: search + folder + sort + done toggle */
+.library-filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+}
+
+.library-filter-row input[type="search"] {
+  flex: 1 1 140px;
+  min-width: 0;
+  min-height: 34px;
+  padding: 5px 10px;
+  font-size: var(--text-label);
+}
+
+.library-filter-row select {
+  flex: 0 1 auto;
+  min-height: 34px;
+  padding: 5px 6px;
+  font-size: var(--text-label);
+  max-width: 120px;
+}
+
+.library-filter-row .done-toggle-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-label);
+  color: var(--ink-60);
+  white-space: nowrap;
+}
+
+.library-filter-row .filter-submit {
+  min-height: 34px;
+  padding: 5px 12px;
+  font-size: var(--text-label);
+}
+
+.sidebar-index-head {
+  padding: 8px 2px 0;
+  color: var(--ink-60);
+  font-size: var(--text-meta);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Unread rows carry the sapphire 2px rule; selected rows add a pale wash */
+.paper-row[data-done="0"] {
+  border-left-color: var(--sapphire);
+}
+
+.paper-row.active {
+  background: var(--sapphire-wash);
+  border-left-color: var(--sapphire);
+}
+
+/* ---------------------------------------------------------- evidence drawer */
+
+.pane-right .pane-top h2 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 18px;
+  line-height: 1.2;
+}
+
+.activity-count-line {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-60);
+  font-size: var(--text-label);
+}
+
+/* ---------------------------------------------------------- mobile: one pane + bottom tabs */
+
+.mobile-tab-bar {
+  display: none;
+}
+
+@media (max-width: 999.98px) {
+  .workspace-shell.tri-workspace,
+  .workspace-shell.tri-workspace:not(.right-collapsed) {
+    grid-template-columns: minmax(0, 1fr);
+    height: calc(100dvh - var(--topbar-height) - 52px);
+  }
+
+  .workspace-shell.tri-workspace .pane-resizer {
+    display: none;
+  }
+
+  .workspace-shell.tri-workspace .pane-left,
+  .workspace-shell.tri-workspace .pane-right {
+    display: none !important;
+  }
+
+  body.mobile-view-library .workspace-shell.tri-workspace .pane-left {
+    display: flex !important;
+  }
+
+  body.mobile-view-chat .workspace-shell.tri-workspace .pane-right {
+    display: flex !important;
+    position: static;
+    width: auto;
+    height: 100%;
+    border-left: 0;
+    z-index: auto;
+  }
+
+  body.mobile-view-library .workspace-shell.tri-workspace .pane-center,
+  body.mobile-view-chat .workspace-shell.tri-workspace .pane-center {
+    display: none !important;
+  }
+
+  .mobile-tab-bar {
+    display: flex;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 56;
+    height: 52px;
+    background: var(--paper);
+    border-top: var(--border-strong);
+  }
+
+  .mobile-tab-button {
+    flex: 1 1 0;
+    border: 0;
+    border-radius: 0;
+    background: var(--paper);
+    color: var(--ink-60);
+    font-size: var(--text-ui);
+    font-weight: 600;
+    min-height: 52px;
+  }
+
+  .mobile-tab-button.is-active {
+    color: var(--sapphire);
+    box-shadow: inset 0 2px 0 var(--sapphire);
+  }
+
+  .item-header {
+    padding: 12px 16px 0;
+  }
+
+  .item-details {
+    padding: 0 16px;
+  }
+
+  /* keep content above the bottom tab bar */
+  .page-shell > main {
+    padding-bottom: 52px;
+  }
+}
+
+/* ---------------------------------------------------------- narrow-width top bar */
+
+@media (max-width: 1300px) {
+  .topbar {
+    gap: 12px;
+  }
+  .topbar .app-logo {
+    width: 108px;
+  }
+  .topbar-user-name {
+    display: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .topbar {
+    flex-wrap: wrap;
+    padding: 8px 12px;
+    min-height: var(--topbar-height);
+    row-gap: 4px;
+  }
+  .topbar-nav {
+    order: 3;
+    width: 100%;
+  }
+  .topbar .hero-brand .eyebrow,
+  .topbar .hero-brand h1 {
+    display: none;
+  }
+}
