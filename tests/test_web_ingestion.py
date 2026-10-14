@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import unittest
@@ -23,7 +24,13 @@ from src.paper_reader.netutils import (
     quote_url_path,
     validate_public_url,
 )
-from src.paper_reader.web_resources import classify_import_target, extract_web_content
+from src.paper_reader.web_resources import (
+    MAX_ASSETS_PER_ITEM,
+    WebResourceStore,
+    classify_import_target,
+    extract_web_content,
+    judge_attachment_candidates,
+)
 
 
 PUBLIC_DNS = [(2, 1, 6, "", ("93.184.216.34", 443))]
@@ -212,6 +219,54 @@ class WebClassificationTests(unittest.TestCase):
         self.assertIn("Ada Researcher", str(metadata["author"]))
 
 
+class RichContentTests(unittest.TestCase):
+    def test_media_assets_are_bounded_downloaded_and_rewritten_locally(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            images = "".join(
+                f'<img src="/media/figure-{index}.png" alt="Figure {index}" width="800" height="600">'
+                for index in range(25)
+            )
+            page = (
+                '<html><head><title>Visual research project</title>'
+                '<meta property="og:image" content="/hero.jpg"></head>'
+                '<body><article><h1>Visual research project</h1>'
+                '<p>This project documents its research method, evaluation protocol, experiments, and results in detail.</p>'
+                f'{images}</article></body></html>'
+            ).encode()
+
+            def fake_fetch(url: str, **kwargs):  # noqa: ANN003
+                if url == "https://example.com/project":
+                    return fetched(page, url=url)
+                return fetched(b"image-bytes", url=url, content_type="image/png")
+
+            store = WebResourceStore(root)
+            with patch("src.paper_reader.web_resources.fetch_public_url", side_effect=fake_fetch):
+                snapshot = store.fetch_and_store(classify_import_target("https://example.com/project"))
+
+            metadata = store.metadata_for_rel_path(snapshot.rel_path)
+            assert metadata is not None
+            self.assertEqual(len(metadata["assets"]), MAX_ASSETS_PER_ITEM)
+            markdown = (root / snapshot.rel_path).read_text(encoding="utf-8")
+            self.assertIn("/files/Web/", markdown)
+            self.assertNotIn("https://example.com/hero.jpg", markdown)
+            self.assertEqual(len(list((root / snapshot.rel_path).with_name(f"{Path(snapshot.rel_path).stem}.assets").glob("*"))), MAX_ASSETS_PER_ITEM)
+
+    def test_attachment_judge_parsing_enforces_three_item_cap(self) -> None:
+        candidates = [{"url": f"https://example.com/file-{index}.pdf", "text": f"Paper {index}"} for index in range(5)]
+
+        class Client:
+            def complete(self, messages, *, model, session_id=None):  # noqa: ANN001
+                return json.dumps([
+                    {"id": index, "kind": "paper-pdf", "title": f"Selected {index}"}
+                    for index in range(5)
+                ])
+
+        selected = judge_attachment_candidates(candidates, page_title="Project", client=Client(), model="cheap")
+        self.assertEqual(len(selected), 3)
+        self.assertEqual([item.title for item in selected], ["Selected 0", "Selected 1", "Selected 2"])
+
+
 class WebImportIntegrationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tempdir = tempfile.TemporaryDirectory()
@@ -224,6 +279,7 @@ class WebImportIntegrationTests(unittest.TestCase):
                 "PAPER_READER_SECRET_KEY": "test-secret",
                 "PAPER_READER_LOGIN_USERNAME": "admin",
                 "PAPER_READER_LOGIN_PASSWORD": "test-password",
+                "PAPER_READER_SCREEN_IMPORTS": "false",
             },
             clear=False,
         )
@@ -353,6 +409,50 @@ class WebImportIntegrationTests(unittest.TestCase):
         record = self.app.library.build_record_for_rel_path(item["rel_path"], [])
         self.assertEqual(record.fetch_status, "failed")
         self.assertIn("non-public", record.preview_text)
+
+    def test_live_import_screening_allows_and_flags_borderline_web_item(self) -> None:
+        url = "https://example.com/research/borderline"
+        self.app.config["SCREEN_IMPORTS"] = True
+
+        class Client:
+            def complete(self, messages, *, model, session_id=None):  # noqa: ANN001
+                return json.dumps([{
+                    "url": url,
+                    "decision": "borderline",
+                    "reason": "Research-adjacent project with limited evaluation detail.",
+                    "corrected_kind": "project",
+                }])
+
+        with patch("src.paper_reader.app.get_llm_client", return_value=Client()):
+            result = self.run_import(url)
+        item = result["items"][0]
+        self.assertEqual(item["status"], "saved")
+        metadata = self.app.library.web_resources.metadata_for_rel_path(item["rel_path"])
+        assert metadata is not None
+        self.assertEqual(metadata["screening"]["decision"], "borderline")
+        html = self.client.get(f"/?paper={item['rel_path']}&tab=source").get_data(as_text=True)
+        self.assertIn("待复核", html)
+
+    def test_live_import_screening_drops_without_creating_item(self) -> None:
+        url = "https://example.com/pricing"
+        self.app.config["SCREEN_IMPORTS"] = True
+
+        class Client:
+            def complete(self, messages, *, model, session_id=None):  # noqa: ANN001
+                return json.dumps([{
+                    "url": url,
+                    "decision": "drop",
+                    "reason": "Marketing and pricing page without research content.",
+                    "corrected_kind": None,
+                }])
+
+        with patch("src.paper_reader.app.get_llm_client", return_value=Client()):
+            result = self.run_import(url)
+        item = result["items"][0]
+        self.assertEqual(item["status"], "failed")
+        self.assertIn("链接未通过内容筛选", item["message"])
+        self.assertIsNone(self.app.team_store.find_paper_by_source("canonical_url", url))
+        self.assertEqual(list((self.library / "Web").rglob("*.md")), [])
 
     def test_upload_limit_is_configured_and_markdown_links_are_scheme_safe(self) -> None:
         self.assertEqual(self.app.config["MAX_CONTENT_LENGTH"], 100 * 1024 * 1024)

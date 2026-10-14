@@ -2534,3 +2534,58 @@ table {
   border: var(--border-strong);
   background: var(--paper);
 }
+
+/* Stage L: rich-resource review state and related attachments */
+.screening-flag {
+  display: flex;
+  gap: 0.75rem;
+  align-items: baseline;
+  padding: 0.65rem 0.85rem;
+  border-block: 1px solid var(--border-subtle, #d9d7d0);
+  color: var(--text-secondary, #5c5a55);
+  background: var(--surface-muted, #f5f3ed);
+}
+
+.screening-flag strong {
+  color: var(--text-primary, #22211f);
+  white-space: nowrap;
+}
+
+.paper-attachments {
+  margin: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--border-subtle, #d9d7d0);
+}
+
+.paper-attachments-head h3 {
+  margin: 0.15rem 0 0.75rem;
+}
+
+.paper-attachments ul {
+  display: grid;
+  gap: 0.55rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.paper-attachments li {
+  display: grid;
+  grid-template-columns: minmax(6.5rem, auto) minmax(0, 1fr) auto;
+  gap: 0.75rem;
+  align-items: baseline;
+}
+
+.paper-attachments li > span,
+.paper-attachments li > small {
+  color: var(--text-secondary, #5c5a55);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+}
+
+.markdown-render img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 1rem auto;
+}

@@ -477,6 +477,9 @@
                   </div>
                 </div>
               {% endif %}
+              {% if selected_screening and selected_screening.decision == 'borderline' %}
+                <div class="screening-flag" role="note"><strong>待复核</strong><span>{{ selected_screening.reason }}</span></div>
+              {% endif %}
               {% if selected_web_html %}
                 <article class="markdown-viewer markdown-render source-viewer-body">{{ selected_web_html }}</article>
               {% else %}
@@ -509,6 +512,23 @@
               <p>你仍然可以点击「Open original」或下载原文件查看。</p>
               <p><a class="button-link secondary" href="{{ url_for('serve_file', rel_path=selected_paper.rel_path) }}" target="_blank" rel="noreferrer">打开原文件</a></p>
             </div>
+          {% endif %}
+          {% if selected_paper_context.attachments %}
+            <section class="paper-attachments" aria-labelledby="paper-attachments-title">
+              <div class="paper-attachments-head">
+                <p class="eyebrow">Related material</p>
+                <h3 id="paper-attachments-title">附件</h3>
+              </div>
+              <ul>
+                {% for attachment in selected_paper_context.attachments %}
+                  <li>
+                    <span>{{ attachment.kind }}</span>
+                    <a href="{{ url_for('serve_file', rel_path=attachment.local_path) if attachment.local_path else attachment.source_url }}" target="_blank" rel="noreferrer">{{ attachment.title }}</a>
+                    {% if attachment.local_path %}<small>本地副本</small>{% endif %}
+                  </li>
+                {% endfor %}
+              </ul>
+            </section>
           {% endif %}
         {% elif selected_prompt %}
           {% if selected_prompt_content %}

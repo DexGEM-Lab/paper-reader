@@ -3033,6 +3033,50 @@ def create_app(
                     if resolved.get("route") == "web":
                         snapshot = fetched_result
                         rel_path = str(snapshot.rel_path)
+                        if (
+                            app.config["SCREEN_IMPORTS"]
+                            and not item.get("refresh")
+                        ):
+                            try:
+                                snapshot_path = app.library.resolve_relative_path(rel_path)  # type: ignore[attr-defined]
+                                sample = snapshot_path.read_text(encoding="utf-8", errors="replace")[:1500]
+                                packet = ScreeningPacket(
+                                    item_id=rel_path,
+                                    rel_path=rel_path,
+                                    title=snapshot.title,
+                                    url=resolved["canonical_url"],
+                                    kind=resolved["resource_kind"],
+                                    provenance=[],
+                                    content=sample,
+                                    fetch_status=snapshot.fetch_status,
+                                )
+                                decision = screen_packets(
+                                    [packet],
+                                    get_llm_client(runtime_config),
+                                    model=runtime_config.llm_cheap_model,
+                                    batch_size=1,
+                                )[0]
+                            except Exception as exc:
+                                decision = None
+                                screening_reason = f"内容筛选失败：{exc}"
+                            else:
+                                screening_reason = decision.error or decision.reason
+                            if decision is None or decision.decision in {"drop", "error"} or decision.error:
+                                app.library.web_resources.delete_snapshot(rel_path)  # type: ignore[attr-defined]
+                                update_action_item(
+                                    items,
+                                    key=target,
+                                    status="failed",
+                                    message=f"链接未通过内容筛选：{screening_reason}",
+                                    source=resolved,
+                                )
+                                report(action_progress_percent(items), f"链接未通过内容筛选：{target}", build_action_result_payload(items))
+                                continue
+                            app.library.web_resources.set_screening_result(  # type: ignore[attr-defined]
+                                rel_path,
+                                decision=decision.decision,
+                                reason=decision.reason,
+                            )
                         app.library._update_active_index_entry(rel_path)  # type: ignore[attr-defined]
                         active_prompt_slugs = [prompt.slug for prompt in app.prompt_store.active_prompts()]  # type: ignore[attr-defined]
                         imported_record = app.library.build_record_for_rel_path(rel_path, active_prompt_slugs)  # type: ignore[attr-defined]
@@ -3045,6 +3089,16 @@ def create_app(
                             imported_by_user_id=requested_by_user_id,
                         )
                         record_action_provenance(action, rel_path, target)
+                        if runtime_config.llm_api_key and snapshot.fetch_status == "ok":
+                            try:
+                                attachments = app.library.web_resources.discover_attachments(  # type: ignore[attr-defined]
+                                    rel_path,
+                                    client=get_llm_client(runtime_config),
+                                    model=runtime_config.llm_cheap_model,
+                                )
+                                app.team_store.replace_attachments(rel_path, attachments)  # type: ignore[attr-defined]
+                            except Exception as exc:
+                                LOGGER.warning("Attachment discovery failed for %s: %s", rel_path, exc)
                         if recommendation_reason.strip() and actor is not None:
                             app.team_store.add_recommendation(rel_path, actor.id, recommendation_reason)  # type: ignore[attr-defined]
                         if snapshot.fetch_status == "ok":
@@ -3650,6 +3704,7 @@ def create_app(
         selected_prompt_job: dict[str, Any] | None = None
         selected_share_payload: dict[str, str] | None = None
         selected_web_html: Markup | None = None
+        selected_screening: dict[str, str] | None = None
         viewer_tabs: list[dict[str, Any]] = []
         selected_arxiv_markdown_status: dict[str, Any] = {
             "available": False,
@@ -3673,6 +3728,7 @@ def create_app(
             "comment_count": 0,
             "prompt_runs": [],
             "sources": [],
+            "attachments": [],
             "current_user_recommendation_reason": "",
         }
         selected_chat_context: dict[str, Any] = {
@@ -3688,6 +3744,13 @@ def create_app(
                 try:
                     snapshot_markdown = app.library.resolve_relative_path(selected_paper.rel_path).read_text(encoding="utf-8")  # type: ignore[attr-defined]
                     selected_web_html = Markup(render_markdown(snapshot_markdown))
+                    web_metadata = app.library.web_resources.metadata_for_rel_path(selected_paper.rel_path) or {}  # type: ignore[attr-defined]
+                    raw_screening = web_metadata.get("screening")
+                    if isinstance(raw_screening, dict):
+                        selected_screening = {
+                            "decision": str(raw_screening.get("decision") or ""),
+                            "reason": str(raw_screening.get("reason") or ""),
+                        }
                 except OSError:
                     selected_web_html = None
             selected_arxiv_markdown_status = app.library.arxiv_markdown_status_for_rel_path(selected_paper.rel_path)  # type: ignore[attr-defined]
@@ -3772,6 +3835,7 @@ def create_app(
             selected_prompt_job=selected_prompt_job,
             selected_share_payload=selected_share_payload,
             selected_web_html=selected_web_html,
+            selected_screening=selected_screening,
             selected_arxiv_markdown_status=selected_arxiv_markdown_status,
             selected_paper_context=selected_paper_context,
             selected_chat_context=selected_chat_context,

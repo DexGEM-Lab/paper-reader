@@ -32,6 +32,7 @@
 - `PAPER_READER_FETCH_MAX_BYTES=104857600`（PDF/文档远程下载上限，默认 100 MiB）
 - `PAPER_READER_PAGE_FETCH_MAX_BYTES=26214400`（网页快照抓取上限，默认 25 MiB）
 - `PAPER_READER_FETCH_MAX_REDIRECTS=10`（远程抓取允许的重定向跳数，默认 10）
+- `PAPER_READER_SCREEN_IMPORTS=true`（默认开启：普通网页抓取后用 cheap model 语义筛选；arXiv/OpenReview/直链 PDF 跳过）
 
 `PAPER_READER_LIBRARY_DIR` 和 `PAPER_READER_SOURCES_ARCHIVE_DIR` 覆盖各自目录；未设置时从 `PAPER_READER_DATA_DIR` 派生。主论文库、SQLite 协作数据、Prompt 结果和 Sources 归档都在这些目录中，不随 Git 提交。
 
