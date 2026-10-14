@@ -4725,6 +4725,10 @@ def create_app(
         response.call_on_close(lambda: zip_path.unlink(missing_ok=True))
         return response
 
+    @app.get("/discover")
+    def discover_index() -> Any:
+        return render_template("discover.html")
+
     @app.get("/sources")
     def sources_index() -> Any:
         source_root = Path(app.config["SOURCE_ARCHIVE_ROOT"])

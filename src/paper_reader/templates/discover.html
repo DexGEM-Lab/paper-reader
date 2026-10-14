@@ -1,0 +1,29 @@
+{% extends 'base.html' %}
+{% block title %}发现 - Paper Reader{% endblock %}
+{% block content %}
+<section class="discover-shell">
+  <header class="discover-head">
+    <p class="eyebrow">Discover</p>
+    <h2>发现</h2>
+    <p class="discover-lede">每天的新论文应该自己走过来，而不是你去找它们。发现流正在建设中：它会按照实验室已有的阅读口味，从每日来源里筛出值得看的论文。</p>
+  </header>
+
+  <section class="discover-empty">
+    <p class="eyebrow">01 · 即将到来</p>
+    <h3>个性化发现流还没上线</h3>
+    <p>现在可以先去来源归档浏览每日 Hugging Face Papers，挑好后一键导入书库。</p>
+    <div class="discover-actions">
+      <a class="button-link" href="{{ url_for('sources_index') }}">打开来源归档</a>
+    </div>
+  </section>
+
+  <section class="discover-sources-note">
+    <p class="eyebrow">02 · 已有能力</p>
+    <h3>来源归档</h3>
+    <p>按天整理的 Hugging Face Daily Papers，支持按天打包下载或直接导入阅读器。</p>
+    <div class="discover-actions">
+      <a class="button-link secondary" href="{{ url_for('sources_index') }}">查看来源归档</a>
+    </div>
+  </section>
+</section>
+{% endblock %}

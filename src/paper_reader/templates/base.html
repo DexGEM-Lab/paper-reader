@@ -28,7 +28,7 @@
   </head>
   <body>
     <div class="page-shell">
-      <header class="hero hero-compact">
+      <header class="hero hero-compact topbar">
         <div class="hero-brand">
           <img class="app-logo" src="{{ url_for('static', filename='brand/dexgem-wordmark.svg') }}" alt="DexGEM" width="132">
           <div>
@@ -36,12 +36,24 @@
             {% if session.get("user_id") %}<h1><a href="{{ url_for('index') }}">论文阅读器</a></h1>{% else %}<h1>论文阅读器</h1>{% endif %}
           </div>
         </div>
-        {% if session.get("user_id") and request.endpoint != 'index' %}
-          <nav class="hero-nav">
-            <a class="button-link secondary" href="{{ url_for('index') }}">主阅读器</a>
-            <a class="button-link secondary" href="{{ url_for('sources_index') }}">Sources</a>
-            <a class="button-link secondary" href="{{ url_for('insights_index') }}">Insights</a>
+        {% if session.get("user_id") %}
+          <nav class="hero-nav topbar-nav" aria-label="主导航">
+            <a class="topbar-nav-link {% if request.endpoint == 'index' %}active{% endif %}" href="{{ url_for('index') }}" {% if request.endpoint == 'index' %}aria-current="page"{% endif %}>书库</a>
+            <a class="topbar-nav-link {% if request.endpoint == 'discover_index' %}active{% endif %}" href="{{ url_for('discover_index') }}" {% if request.endpoint == 'discover_index' %}aria-current="page"{% endif %}>发现</a>
+            <a class="topbar-nav-link {% if request.endpoint == 'insights_index' %}active{% endif %}" href="{{ url_for('insights_index') }}" {% if request.endpoint == 'insights_index' %}aria-current="page"{% endif %}>洞察</a>
           </nav>
+          <div class="topbar-actions">
+            <button type="button" class="topbar-add-button" data-quick-add-open aria-haspopup="dialog" title="添加链接或上传文件">
+              <span class="topbar-add-plus" aria-hidden="true">+</span> 添加
+            </button>
+            {% block topbar_actions %}{% endblock %}
+            {% if current_user %}
+              <div class="topbar-user" title="{{ current_user.display_name }} · {{ current_user.role }}">
+                <span class="topbar-user-name">{{ current_user.display_name }}</span>
+                <a class="topbar-logout" href="{{ url_for('logout') }}">退出</a>
+              </div>
+            {% endif %}
+          </div>
         {% endif %}
       </header>
 
@@ -59,6 +71,74 @@
         {% block content %}{% endblock %}
       </main>
     </div>
+
+    {% if session.get("user_id") %}
+      <dialog class="quick-add-dialog" data-quick-add-dialog aria-labelledby="quick-add-title">
+        <div class="quick-add-head">
+          <div>
+            <p class="eyebrow">Quick Add</p>
+            <h2 id="quick-add-title">添加到书库</h2>
+          </div>
+          <button type="button" class="ghost-button quick-add-close" data-quick-add-close aria-label="关闭">×</button>
+        </div>
+        <form action="{{ url_for('import_link_route') }}" method="post" class="quick-add-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <label>
+            <span>研究链接或 arXiv ID（每行一个）</span>
+            <textarea name="import_target" rows="4" placeholder="https://arxiv.org/abs/2501.12948&#10;https://openreview.net/forum?id=..."></textarea>
+          </label>
+          <label>
+            <span>推荐理由（可选）</span>
+            <input type="text" name="recommendation_reason" placeholder="例如：适合本周组会讨论">
+          </label>
+          <p class="quick-add-hint">支持 arXiv、OpenReview、直接 PDF、项目站、技术博客和新闻链接；网页会保存为 Markdown 快照。</p>
+          <div class="quick-add-actions">
+            <button type="submit">导入链接</button>
+          </div>
+        </form>
+        <div class="quick-add-divider"><span>或上传文件</span></div>
+        <form action="{{ url_for('upload') }}" method="post" enctype="multipart/form-data" class="quick-add-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="target_folder" value="{{ '' if is_admin else member_submission_folder }}">
+          <label>
+            <span>选择文件（{{ allowed_extensions }}）</span>
+            <input type="file" name="files" multiple accept=".pdf,.doc,.docx">
+          </label>
+          <div class="quick-add-actions">
+            <button type="submit" class="secondary">上传文件</button>
+          </div>
+        </form>
+      </dialog>
+      <script>
+        (() => {
+          const dialog = document.querySelector("[data-quick-add-dialog]");
+          if (!dialog) return;
+          const openDialog = () => {
+            if (typeof dialog.showModal === "function") {
+              dialog.showModal();
+            } else {
+              dialog.setAttribute("open", "open");
+            }
+          };
+          const closeDialog = () => {
+            if (typeof dialog.close === "function") {
+              dialog.close();
+            } else {
+              dialog.removeAttribute("open");
+            }
+          };
+          document.querySelectorAll("[data-quick-add-open]").forEach((button) => {
+            button.addEventListener("click", openDialog);
+          });
+          dialog.querySelectorAll("[data-quick-add-close]").forEach((button) => {
+            button.addEventListener("click", closeDialog);
+          });
+          dialog.addEventListener("click", (event) => {
+            if (event.target === dialog) closeDialog();
+          });
+        })();
+      </script>
+    {% endif %}
     {% block scripts %}{% endblock %}
   </body>
 </html>
