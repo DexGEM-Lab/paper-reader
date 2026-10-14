@@ -1,600 +1,527 @@
 {% extends 'base.html' %}
-{% block title %}Insights - Paper Reader{% endblock %}
+{% block title %}洞察 - Paper Reader{% endblock %}
 {% block content %}
 <section class="insights-shell">
-  <div class="insights-head card">
-    <div>
-      <p class="eyebrow">Insights</p>
-      <h2>历史脉络</h2>
-      <p class="sidebar-copy">这一块回答：一个方向是怎么一步一步走到今天的，哪些论文是奠基点，哪些论文改写了路线，哪些方法后来变成了默认做法。</p>
-    </div>
-    <div class="insights-head-actions">
-      {% if insights_status.can_stop %}
-        <form action="{{ url_for('insights_history_stop_route') }}" method="post" class="inline-form">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <button type="submit" class="secondary">停止</button>
-        </form>
-      {% endif %}
-      {% if insights_status.can_continue %}
-        <form action="{{ url_for('insights_history_rebuild_route') }}" method="post" class="inline-form">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <button type="submit">继续</button>
-        </form>
-      {% else %}
-        <form action="{{ url_for('insights_history_rebuild_route') }}" method="post" class="inline-form">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <button type="submit">{% if insights_status.cache_exists %}重新生成{% else %}重建历史脉络{% endif %}</button>
-        </form>
-      {% endif %}
-    </div>
-  </div>
+  <header class="insights-page-head">
+    <p class="eyebrow">Insights</p>
+    <h2>洞察</h2>
+    <p class="insights-page-lede">三种方式看书库：一个方向怎么走到今天（历史脉络），最近什么在升温（Trend Radar），以及下一步值得下注什么（Opportunity Map）。</p>
+  </header>
 
-  <div class="insights-status-grid">
-    <article class="card insights-status-card">
-      <strong>生成状态</strong>
-      <p id="history-status-text">
-        {% if insights_status.state == 'running' %}
-          正在后台读取核心解读并生成历史脉络。
-        {% elif insights_status.state == 'stopping' %}
-          正在停止历史脉络任务，当前步骤收尾后会自动停下。
-        {% elif insights_status.state == 'stopped' %}
-          历史脉络生成已暂停；当前进度已保存，可以稍后继续。
-        {% elif insights_status.state == 'failed' %}
-          上一次生成失败：{{ insights_status.error or '未知错误' }}
-        {% elif insights_status.state == 'ready' and insights_payload %}
-          历史脉络已准备好，可以直接浏览。
-        {% elif insights_payload %}
-          已加载最近一次保存的历史脉络草稿。
-        {% else %}
-          还没有生成历史脉络，请先点击“重建历史脉络”。
-        {% endif %}
-      </p>
-      <div class="insights-progress-shell" aria-label="历史脉络生成进度">
-        <div class="insights-progress-bar">
-          <span id="history-progress-fill" style="width: {{ insights_status.progress or 0 }}%"></span>
-        </div>
-        <div class="insights-progress-meta">
-          <strong id="history-progress-value">{{ insights_status.progress or 0 }}%</strong>
-        </div>
-        <p class="insights-progress-primary" id="history-scan-text">
-          {% set history_scan_total = insights_status.total_core_papers or (insights_payload.source_paper_count if insights_payload else 0) %}
-          {% set history_scan_done = insights_status.scanned_core_papers or (insights_payload.source_paper_count if insights_payload else 0) %}
-          {% if history_scan_total %}
-            核心解读扫描：{{ history_scan_done }}/{{ history_scan_total }} 篇
+  <section class="insights-module" id="insights-history">
+    <header class="insights-module-head">
+      <div class="insights-module-title">
+        <p class="eyebrow">01 · History</p>
+        <h3>历史脉络</h3>
+        <p class="insights-lede">哪些论文是奠基点，哪些改写了路线，哪些方法后来变成了默认做法。</p>
+      </div>
+      <div class="insights-module-status">
+        <p class="insights-status-line" id="history-status-text">
+          {% if insights_status.state == 'running' %}
+            正在后台读取核心解读并生成历史脉络。
+          {% elif insights_status.state == 'stopping' %}
+            正在停止历史脉络任务，当前步骤收尾后会自动停下。
+          {% elif insights_status.state == 'stopped' %}
+            历史脉络生成已暂停；当前进度已保存，可以稍后继续。
+          {% elif insights_status.state == 'failed' %}
+            上一次生成失败：{{ insights_status.error or '未知错误' }}
+          {% elif insights_status.state == 'ready' and insights_payload %}
+            已生成：基于 {{ insights_payload.source_paper_count }} 篇核心解读，整理出 {{ insights_payload.theme_count }} 条历史主线（{{ insights_payload.generated_at }}）。
+          {% elif insights_payload %}
+            已加载最近一次保存的历史脉络草稿。
           {% else %}
-            核心解读扫描：等待开始
+            还没有生成历史脉络。
           {% endif %}
         </p>
-        <span class="insights-progress-secondary" id="history-progress-stage">
-          {% if insights_status.total_themes %}
-            历史主线：{{ insights_status.completed_themes }}/{{ insights_status.total_themes }} 条
-            {% if insights_status.current_theme_label %} · 当前：{{ insights_status.current_theme_label }}{% endif %}
-          {% else %}
-            历史主线：等待开始
-          {% endif %}
-        </span>
-      </div>
-      <p class="insights-status-meta" id="history-status-updated">
-        {% if insights_status.updated_at %}最近更新：{{ insights_status.updated_at }}{% else %}还没有生成记录{% endif %}
-      </p>
-    </article>
-
-    {% if insights_payload %}
-      <article class="card insights-status-card">
-        <strong>分析范围</strong>
-        <p>基于 {{ insights_payload.source_paper_count }} 篇已有“核心解读”的论文，当前已整理 {{ insights_payload.theme_count }} 条历史主线。</p>
-        <p class="insights-status-meta">生成时间：{{ insights_payload.generated_at }}</p>
-      </article>
-    {% endif %}
-  </div>
-
-  {% if insights_payload and insights_payload.themes %}
-    <section class="insights-theme-grid">
-      {% for theme in insights_payload.themes %}
-        <article class="card insights-theme-card" id="theme-{{ theme.slug }}">
-          <div class="insights-theme-head">
-            <div>
-              <p class="eyebrow">{{ theme.label }}</p>
-              <h3>{{ theme.label }}</h3>
-              <p class="insights-theme-copy">{{ theme.description }}</p>
-            </div>
-            <div class="insights-theme-metrics">
-              <span>{{ theme.paper_count }} 篇</span>
-              {% if theme.start_date and theme.end_date %}<span>{{ theme.start_date }} -> {{ theme.end_date }}</span>{% endif %}
-              <span>{% if theme.llm_used %}LLM 已参与梳理{% else %}当前为规则回退稿{% endif %}</span>
-            </div>
+        <div class="insights-progress-inline" aria-label="历史脉络生成进度">
+          <div class="insights-progress-bar">
+            <span id="history-progress-fill" style="width: {{ insights_status.progress or 0 }}%"></span>
           </div>
+          <strong id="history-progress-value">{{ insights_status.progress or 0 }}%</strong>
+        </div>
+        <p class="insights-progress-meta-line">
+          <span id="history-scan-text">
+            {% set history_scan_total = insights_status.total_core_papers or (insights_payload.source_paper_count if insights_payload else 0) %}
+            {% set history_scan_done = insights_status.scanned_core_papers or (insights_payload.source_paper_count if insights_payload else 0) %}
+            {% if history_scan_total %}
+              核心解读扫描：{{ history_scan_done }}/{{ history_scan_total }} 篇
+            {% else %}
+              核心解读扫描：等待开始
+            {% endif %}
+          </span>
+          <span id="history-progress-stage">
+            {% if insights_status.total_themes %}
+              历史主线：{{ insights_status.completed_themes }}/{{ insights_status.total_themes }} 条{% if insights_status.current_theme_label %} · 当前：{{ insights_status.current_theme_label }}{% endif %}
+            {% endif %}
+          </span>
+          <span id="history-status-updated">{% if insights_status.updated_at %}更新于 {{ insights_status.updated_at }}{% endif %}</span>
+        </p>
+        <div class="insights-module-actions">
+          {% if insights_status.can_stop %}
+            <form action="{{ url_for('insights_history_stop_route') }}" method="post" class="inline-form">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button type="submit" class="secondary">停止</button>
+            </form>
+          {% elif insights_status.can_continue %}
+            <form action="{{ url_for('insights_history_rebuild_route') }}" method="post" class="inline-form">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button type="submit">继续</button>
+            </form>
+          {% else %}
+            <form action="{{ url_for('insights_history_rebuild_route') }}" method="post" class="inline-form">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button type="submit">{% if insights_status.cache_exists %}重新生成{% else %}重建历史脉络{% endif %}</button>
+            </form>
+          {% endif %}
+        </div>
+      </div>
+    </header>
 
-          <div class="insights-story-grid">
-            <section class="insights-panel insights-narrative-panel">
-              <h4>为什么这条线会出现</h4>
-              <p>{{ theme.why_it_emerged }}</p>
-              <h4>历史脉络摘要</h4>
-              <p>{{ theme.history_summary }}</p>
-              {% if theme.paradigm_shifts %}
-                <div class="insights-chip-group">
-                  {% for item in theme.paradigm_shifts %}
-                    <span class="insights-chip">{{ item }}</span>
+    {% if insights_payload and insights_payload.themes %}
+      <div class="insights-theme-grid">
+        {% for theme in insights_payload.themes %}
+          <article class="card insights-theme-card" id="theme-{{ theme.slug }}">
+            <div class="insights-theme-head">
+              <div>
+                <p class="eyebrow">{{ theme.label }}</p>
+                <h3>{{ theme.label }}</h3>
+                <p class="insights-theme-copy">{{ theme.description }}</p>
+              </div>
+              <div class="insights-theme-metrics">
+                <span>{{ theme.paper_count }} 篇</span>
+                {% if theme.start_date and theme.end_date %}<span>{{ theme.start_date }} -> {{ theme.end_date }}</span>{% endif %}
+                <span>{% if theme.llm_used %}LLM 已参与梳理{% else %}当前为规则回退稿{% endif %}</span>
+              </div>
+            </div>
+
+            <div class="insights-story-grid">
+              <section class="insights-panel insights-narrative-panel">
+                <h4>为什么这条线会出现</h4>
+                <p>{{ theme.why_it_emerged }}</p>
+                <h4>历史脉络摘要</h4>
+                <p>{{ theme.history_summary }}</p>
+                {% if theme.paradigm_shifts %}
+                  <div class="insights-chip-group">
+                    {% for item in theme.paradigm_shifts %}
+                      <span class="insights-chip">{{ item }}</span>
+                    {% endfor %}
+                  </div>
+                {% endif %}
+              </section>
+
+              <section class="insights-panel insights-volume-panel">
+                <div class="insights-panel-head">
+                  <h4>时间线热度</h4>
+                  <span>按年份看论文信号</span>
+                </div>
+                <div class="insights-year-bars">
+                  {% set max_count = (theme.year_counts | map(attribute='count') | max) if theme.year_counts else 1 %}
+                  {% for item in theme.year_counts %}
+                    <div class="insights-year-bar" title="{{ item.year }}: {{ item.count }} 篇">
+                      <span class="insights-year-label">{{ item.year }}</span>
+                      <span class="insights-year-fill" style="height: {{ (item.count / max_count * 100) if max_count else 0 }}%"></span>
+                      <strong>{{ item.count }}</strong>
+                    </div>
                   {% endfor %}
                 </div>
-              {% endif %}
-            </section>
+              </section>
+            </div>
 
-            <section class="insights-panel insights-volume-panel">
+            <section class="insights-panel insights-phase-panel">
               <div class="insights-panel-head">
-                <h4>时间线热度</h4>
-                <span>按年份看论文信号</span>
+                <h4>阶段划分</h4>
+                <span>像 dynamic survey 一样看范式怎么变化</span>
               </div>
-              <div class="insights-year-bars">
-                {% set max_count = (theme.year_counts | map(attribute='count') | max) if theme.year_counts else 1 %}
-                {% for item in theme.year_counts %}
-                  <div class="insights-year-bar" title="{{ item.year }}: {{ item.count }} 篇">
-                    <span class="insights-year-label">{{ item.year }}</span>
-                    <span class="insights-year-fill" style="height: {{ (item.count / max_count * 100) if max_count else 0 }}%"></span>
-                    <strong>{{ item.count }}</strong>
-                  </div>
+              <div class="insights-phase-strip">
+                {% for phase in theme.phase_cards %}
+                  <article class="insights-phase-card">
+                    <p class="insights-phase-label">{{ phase.phase }}</p>
+                    <h5>{{ phase.label }}</h5>
+                    <p>{{ phase.summary }}</p>
+                    <p class="insights-phase-shift">{{ phase.main_shift }}</p>
+                    {% if phase.papers %}
+                      <div class="insights-paper-mini-list">
+                        {% for paper in phase.papers %}
+                          <a class="insights-paper-mini" href="{{ url_for('index', paper=paper.rel_path, tab='core-zh') }}" target="_blank" rel="noreferrer">
+                            <span>{{ paper.sort_date or 'unknown' }}</span>
+                            <strong>{{ paper.title }}</strong>
+                          </a>
+                        {% endfor %}
+                      </div>
+                    {% endif %}
+                  </article>
                 {% endfor %}
               </div>
             </section>
-          </div>
 
-          <section class="insights-panel insights-phase-panel">
-            <div class="insights-panel-head">
-              <h4>阶段划分</h4>
-              <span>像 dynamic survey 一样看范式怎么变化</span>
-            </div>
-            <div class="insights-phase-strip">
-              {% for phase in theme.phase_cards %}
-                <article class="insights-phase-card">
-                  <p class="insights-phase-label">{{ phase.phase }}</p>
-                  <h5>{{ phase.label }}</h5>
-                  <p>{{ phase.summary }}</p>
-                  <p class="insights-phase-shift">{{ phase.main_shift }}</p>
-                  {% if phase.papers %}
-                    <div class="insights-paper-mini-list">
-                      {% for paper in phase.papers %}
-                        <a class="insights-paper-mini" href="{{ url_for('index', paper=paper.rel_path, tab='core-zh') }}" target="_blank" rel="noreferrer">
-                          <span>{{ paper.sort_date or 'unknown' }}</span>
-                          <strong>{{ paper.title }}</strong>
-                        </a>
-                      {% endfor %}
+            <section class="insights-panel insights-timeline-panel">
+              <div class="insights-panel-head">
+                <h4>关键节点</h4>
+                <span>哪些是奠基点，哪些是转折点，哪些把旧路线推成主流</span>
+              </div>
+              <div class="insights-timeline">
+                {% for milestone in theme.milestones %}
+                  <article class="insights-milestone insights-role-{{ milestone.role }}">
+                    <div class="insights-milestone-dot"></div>
+                    <div class="insights-milestone-body">
+                      <p class="insights-milestone-meta">{{ milestone.sort_date or 'unknown' }} · {{ milestone.role }}</p>
+                      <h5>{{ milestone.title }}</h5>
+                      <p>{{ milestone.why }}</p>
+                      <a class="button-link secondary" href="{{ url_for('index', paper=milestone.rel_path, tab='core-zh') }}" target="_blank" rel="noreferrer">查看这篇论文</a>
                     </div>
-                  {% endif %}
-                </article>
-              {% endfor %}
-            </div>
-          </section>
+                  </article>
+                {% endfor %}
+              </div>
+            </section>
+          </article>
+        {% endfor %}
+      </div>
+    {% endif %}
+  </section>
 
-          <section class="insights-panel insights-timeline-panel">
-            <div class="insights-panel-head">
-              <h4>关键节点</h4>
-              <span>哪些是奠基点，哪些是转折点，哪些把旧路线推成主流</span>
-            </div>
-            <div class="insights-timeline">
-              {% for milestone in theme.milestones %}
-                <article class="insights-milestone insights-role-{{ milestone.role }}">
-                  <div class="insights-milestone-dot"></div>
-                  <div class="insights-milestone-body">
-                    <p class="insights-milestone-meta">{{ milestone.sort_date or 'unknown' }} · {{ milestone.role }}</p>
-                    <h5>{{ milestone.title }}</h5>
-                    <p>{{ milestone.why }}</p>
-                    <a class="button-link secondary" href="{{ url_for('index', paper=milestone.rel_path, tab='core-zh') }}" target="_blank" rel="noreferrer">查看这篇论文</a>
-                  </div>
-                </article>
-              {% endfor %}
-            </div>
-          </section>
-        </article>
-      {% endfor %}
-    </section>
-  {% else %}
-    <section class="card viewer-empty insights-empty-card">
-      <h3>还没有历史脉络</h3>
-      <p>这个子页面会读取你已经生成好的“核心解读”，先把论文重新整理成可浏览的历史主线，再做更高层的 insight。</p>
-      <form action="{{ url_for('insights_history_rebuild_route') }}" method="post" class="inline-form centered-form">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <button type="submit">开始第一次生成</button>
-      </form>
-    </section>
-  {% endif %}
-</section>
-
-<section class="insights-shell insights-module-shell">
-  <div class="insights-head card insights-momentum-head">
-    <div>
-      <p class="eyebrow">Momentum</p>
-      <h2>Trend Radar</h2>
-      <p class="sidebar-copy">沿着历史脉络继续往前看：最近 30/60/90 天里，哪些 topic 在加速增长，哪些方法路线突然被 follow，哪些 benchmark / dataset / evaluation setup 开始变成焦点。</p>
-    </div>
-    <div class="insights-head-actions">
-      {% if momentum_status.can_stop %}
-        <form action="{{ url_for('insights_momentum_stop_route') }}" method="post" class="inline-form">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <button type="submit" class="secondary">停止</button>
-        </form>
-      {% endif %}
-      {% if momentum_status.can_continue %}
-        <form action="{{ url_for('insights_momentum_rebuild_route') }}" method="post" class="inline-form">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <button type="submit">继续</button>
-        </form>
-      {% else %}
-        <form action="{{ url_for('insights_momentum_rebuild_route') }}" method="post" class="inline-form">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <button type="submit">{% if momentum_status.cache_exists %}重新生成{% else %}构建 Momentum Radar{% endif %}</button>
-        </form>
-      {% endif %}
-    </div>
-  </div>
-
-  <div class="insights-status-grid">
-    <article class="card insights-status-card">
-      <strong>生成状态</strong>
-      <p id="momentum-status-text">
-        {% if momentum_status.state == 'running' %}
-          正在后台扫描核心解读并生成 Momentum Radar。
-        {% elif momentum_status.state == 'stopping' %}
-          正在停止 Momentum Radar 任务，当前步骤收尾后会自动停下。
-        {% elif momentum_status.state == 'stopped' %}
-          Momentum Radar 生成已暂停；当前进度已保存，可以稍后继续。
-        {% elif momentum_status.state == 'failed' %}
-          上一次生成失败：{{ momentum_status.error or '未知错误' }}
-        {% elif momentum_status.state == 'ready' and momentum_payload %}
-          Momentum Radar 已准备好，可以直接浏览最近 30/60/90 天的研究热区。
-        {% elif momentum_payload %}
-          已加载最近一次保存的 Momentum 草稿。
-        {% else %}
-          还没有生成 Momentum Radar，请先点击“构建 Momentum Radar”。
-        {% endif %}
-      </p>
-      <div class="insights-progress-shell" aria-label="Momentum Radar 生成进度">
-        <div class="insights-progress-bar insights-progress-bar-momentum">
-          <span id="momentum-progress-fill" style="width: {{ momentum_status.progress or 0 }}%"></span>
-        </div>
-        <div class="insights-progress-meta">
+  <section class="insights-module" id="insights-momentum">
+    <header class="insights-module-head">
+      <div class="insights-module-title">
+        <p class="eyebrow">02 · Momentum</p>
+        <h3>Trend Radar</h3>
+        <p class="insights-lede">最近 30/60/90 天里，哪些 topic 在加速，哪些方法路线突然被 follow，哪些 benchmark 开始变成焦点。</p>
+      </div>
+      <div class="insights-module-status">
+        <p class="insights-status-line" id="momentum-status-text">
+          {% if momentum_status.state == 'running' %}
+            正在后台扫描核心解读并生成 Momentum Radar。
+          {% elif momentum_status.state == 'stopping' %}
+            正在停止 Momentum Radar 任务，当前步骤收尾后会自动停下。
+          {% elif momentum_status.state == 'stopped' %}
+            Momentum Radar 生成已暂停；当前进度已保存，可以稍后继续。
+          {% elif momentum_status.state == 'failed' %}
+            上一次生成失败：{{ momentum_status.error or '未知错误' }}
+          {% elif momentum_status.state == 'ready' and momentum_payload %}
+            已生成：基于 {{ momentum_payload.source_paper_count }} 篇核心解读，整理出 {{ momentum_payload.window_count }} 个最近窗口（锚点 {{ momentum_payload.anchor_date }}）。
+          {% elif momentum_payload %}
+            已加载最近一次保存的 Momentum 草稿。
+          {% else %}
+            还没有生成 Momentum Radar。
+          {% endif %}
+        </p>
+        <div class="insights-progress-inline" aria-label="Momentum Radar 生成进度">
+          <div class="insights-progress-bar insights-progress-bar-momentum">
+            <span id="momentum-progress-fill" style="width: {{ momentum_status.progress or 0 }}%"></span>
+          </div>
           <strong id="momentum-progress-value">{{ momentum_status.progress or 0 }}%</strong>
         </div>
-        <p class="insights-progress-primary" id="momentum-scan-text">
-          {% set momentum_scan_total = momentum_status.total_core_papers or (momentum_payload.source_paper_count if momentum_payload else 0) %}
-          {% set momentum_scan_done = momentum_status.scanned_core_papers or (momentum_payload.source_paper_count if momentum_payload else 0) %}
-          {% if momentum_scan_total %}
-            核心解读扫描：{{ momentum_scan_done }}/{{ momentum_scan_total }} 篇
+        <p class="insights-progress-meta-line">
+          <span id="momentum-scan-text">
+            {% set momentum_scan_total = momentum_status.total_core_papers or (momentum_payload.source_paper_count if momentum_payload else 0) %}
+            {% set momentum_scan_done = momentum_status.scanned_core_papers or (momentum_payload.source_paper_count if momentum_payload else 0) %}
+            {% if momentum_scan_total %}
+              核心解读扫描：{{ momentum_scan_done }}/{{ momentum_scan_total }} 篇
+            {% else %}
+              核心解读扫描：等待开始
+            {% endif %}
+          </span>
+          <span id="momentum-progress-stage">
+            {% if momentum_status.total_windows %}
+              研究热区窗口：{{ momentum_status.completed_windows }}/{{ momentum_status.total_windows }} 个{% if momentum_status.current_window_label %} · 当前：{{ momentum_status.current_window_label }}{% endif %}
+            {% endif %}
+          </span>
+          <span id="momentum-status-updated">{% if momentum_status.updated_at %}更新于 {{ momentum_status.updated_at }}{% endif %}</span>
+        </p>
+        <div class="insights-module-actions">
+          {% if momentum_status.can_stop %}
+            <form action="{{ url_for('insights_momentum_stop_route') }}" method="post" class="inline-form">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button type="submit" class="secondary">停止</button>
+            </form>
+          {% elif momentum_status.can_continue %}
+            <form action="{{ url_for('insights_momentum_rebuild_route') }}" method="post" class="inline-form">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button type="submit">继续</button>
+            </form>
           {% else %}
-            核心解读扫描：等待开始
+            <form action="{{ url_for('insights_momentum_rebuild_route') }}" method="post" class="inline-form">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button type="submit">{% if momentum_status.cache_exists %}重新生成{% else %}构建 Momentum Radar{% endif %}</button>
+            </form>
+          {% endif %}
+        </div>
+      </div>
+    </header>
+
+    {% if momentum_payload and momentum_payload.windows %}
+      <div class="momentum-window-grid">
+        {% for window in momentum_payload.windows %}
+          <article class="card momentum-window-card" id="momentum-{{ window.days }}">
+            <div class="insights-theme-head momentum-window-head">
+              <div>
+                <p class="eyebrow">{{ window.label }}</p>
+                <h3>{{ window.label }}</h3>
+                <p class="insights-theme-copy">{{ window.summary }}</p>
+              </div>
+              <div class="insights-theme-metrics">
+                <span>{{ window.paper_count }} 篇</span>
+                <span>{{ window.start_date }} -> {{ window.anchor_date }}</span>
+                <span>{% if window.llm_used %}LLM 已参与梳理{% else %}当前为规则回退稿{% endif %}</span>
+              </div>
+            </div>
+
+            <div class="momentum-list-grid">
+              <section class="insights-panel momentum-panel">
+                <div class="insights-panel-head">
+                  <h4>增长最快的 Topic</h4>
+                  <span>最近突然升温的话题</span>
+                </div>
+                {% if window.hot_topics %}
+                  <div class="momentum-signal-list">
+                    {% for item in window.hot_topics %}
+                      <article class="momentum-signal-item">
+                        <div class="momentum-signal-top">
+                          <strong>{{ item.name }}</strong>
+                          <span class="momentum-signal-meta">最近 {{ item.count }} · 前窗 {{ item.previous_count }}</span>
+                        </div>
+                        <p>{{ item.why }}</p>
+                        {% if item.papers %}
+                          <div class="insights-paper-mini-list">
+                            {% for paper in item.papers %}
+                              <a class="insights-paper-mini" href="{{ url_for('index', paper=paper.rel_path, tab='core-zh') }}" target="_blank" rel="noreferrer">
+                                <span>{{ paper.sort_date or 'unknown' }}</span>
+                                <strong>{{ paper.title }}</strong>
+                              </a>
+                            {% endfor %}
+                          </div>
+                        {% endif %}
+                      </article>
+                    {% endfor %}
+                  </div>
+                {% else %}
+                  <p class="insights-status-meta">这个窗口里还没有明显的话题增长信号。</p>
+                {% endif %}
+              </section>
+
+              <section class="insights-panel momentum-panel">
+                <div class="insights-panel-head">
+                  <h4>被大量 Follow 的方法路线</h4>
+                  <span>方法范式正在怎么迁移</span>
+                </div>
+                {% if window.method_routes %}
+                  <div class="momentum-signal-list">
+                    {% for item in window.method_routes %}
+                      <article class="momentum-signal-item">
+                        <div class="momentum-signal-top">
+                          <strong>{{ item.name }}</strong>
+                          <span class="momentum-signal-meta">最近 {{ item.count }} · 前窗 {{ item.previous_count }}</span>
+                        </div>
+                        <p>{{ item.why }}</p>
+                        {% if item.papers %}
+                          <div class="insights-paper-mini-list">
+                            {% for paper in item.papers %}
+                              <a class="insights-paper-mini" href="{{ url_for('index', paper=paper.rel_path, tab='core-zh') }}" target="_blank" rel="noreferrer">
+                                <span>{{ paper.sort_date or 'unknown' }}</span>
+                                <strong>{{ paper.title }}</strong>
+                              </a>
+                            {% endfor %}
+                          </div>
+                        {% endif %}
+                      </article>
+                    {% endfor %}
+                  </div>
+                {% else %}
+                  <p class="insights-status-meta">这个窗口里还没有明显的方法升温信号。</p>
+                {% endif %}
+              </section>
+
+              <section class="insights-panel momentum-panel">
+                <div class="insights-panel-head">
+                  <h4>Benchmark / Dataset / Eval 焦点</h4>
+                  <span>最近评测与数据注意力落在哪</span>
+                </div>
+                {% if window.benchmark_focus %}
+                  <div class="momentum-signal-list">
+                    {% for item in window.benchmark_focus %}
+                      <article class="momentum-signal-item">
+                        <div class="momentum-signal-top">
+                          <strong>{{ item.name }}</strong>
+                          <span class="momentum-signal-meta">最近 {{ item.count }} · 前窗 {{ item.previous_count }}</span>
+                        </div>
+                        <p>{{ item.why }}</p>
+                        {% if item.papers %}
+                          <div class="insights-paper-mini-list">
+                            {% for paper in item.papers %}
+                              <a class="insights-paper-mini" href="{{ url_for('index', paper=paper.rel_path, tab='core-zh') }}" target="_blank" rel="noreferrer">
+                                <span>{{ paper.sort_date or 'unknown' }}</span>
+                                <strong>{{ paper.title }}</strong>
+                              </a>
+                            {% endfor %}
+                          </div>
+                        {% endif %}
+                      </article>
+                    {% endfor %}
+                  </div>
+                {% else %}
+                  <p class="insights-status-meta">这个窗口里还没有明显的 benchmark / dataset / eval 聚焦变化。</p>
+                {% endif %}
+              </section>
+
+              <section class="insights-panel momentum-panel">
+                <div class="insights-panel-head">
+                  <h4>快速聚集的边缘信号</h4>
+                  <span>小方向开始形成早期密度</span>
+                </div>
+                {% if window.emerging_edges %}
+                  <div class="momentum-signal-list">
+                    {% for item in window.emerging_edges %}
+                      <article class="momentum-signal-item">
+                        <div class="momentum-signal-top">
+                          <strong>{{ item.name }}</strong>
+                          <span class="momentum-signal-meta">{{ item.kind }} · 最近 {{ item.count }} · 前窗 {{ item.previous_count }}</span>
+                        </div>
+                        <p>{{ item.why }}</p>
+                        {% if item.papers %}
+                          <div class="insights-paper-mini-list">
+                            {% for paper in item.papers %}
+                              <a class="insights-paper-mini" href="{{ url_for('index', paper=paper.rel_path, tab='core-zh') }}" target="_blank" rel="noreferrer">
+                                <span>{{ paper.sort_date or 'unknown' }}</span>
+                                <strong>{{ paper.title }}</strong>
+                              </a>
+                            {% endfor %}
+                          </div>
+                        {% endif %}
+                      </article>
+                    {% endfor %}
+                  </div>
+                {% else %}
+                  <p class="insights-status-meta">这个窗口里还没有明显的边缘信号聚集。</p>
+                {% endif %}
+              </section>
+            </div>
+          </article>
+        {% endfor %}
+      </div>
+    {% endif %}
+  </section>
+
+  <section class="insights-module" id="insights-opportunity">
+    <header class="insights-module-head">
+      <div class="insights-module-title">
+        <p class="eyebrow">03 · Opportunity</p>
+        <h3>Opportunity Map</h3>
+        <p class="insights-lede">哪些问题还没被解决，哪些 claim 证据薄，哪些方向已经拥挤，哪些低密度方向值得提前下注。</p>
+      </div>
+      <div class="insights-module-status">
+        <p class="insights-status-line" id="opportunity-status-text">
+          {% if opportunity_status.state == 'running' %}
+            正在后台扫描核心解读并生成 Opportunity Map。
+          {% elif opportunity_status.state == 'stopping' %}
+            正在停止 Opportunity Map 任务，当前步骤收尾后会自动停下。
+          {% elif opportunity_status.state == 'stopped' %}
+            Opportunity Map 生成已暂停；当前进度已保存，可以稍后继续。
+          {% elif opportunity_status.state == 'failed' %}
+            上一次生成失败：{{ opportunity_status.error or '未知错误' }}
+          {% elif opportunity_status.state == 'ready' and opportunity_payload %}
+            已生成：基于 {{ opportunity_payload.source_paper_count }} 篇核心解读、{{ opportunity_payload.history_theme_count }} 条历史主线与 {{ opportunity_payload.momentum_window_count }} 个 momentum 窗口（锚点 {{ opportunity_payload.anchor_date }}）。
+          {% elif opportunity_payload %}
+            已加载最近一次保存的 Opportunity 草稿。
+          {% else %}
+            还没有生成 Opportunity Map。
           {% endif %}
         </p>
-        <span class="insights-progress-secondary" id="momentum-progress-stage">
-          {% if momentum_status.total_windows %}
-            研究热区窗口：{{ momentum_status.completed_windows }}/{{ momentum_status.total_windows }} 个
-            {% if momentum_status.current_window_label %} · 当前：{{ momentum_status.current_window_label }}{% endif %}
-          {% else %}
-            研究热区窗口：等待开始
-          {% endif %}
-        </span>
-      </div>
-      <p class="insights-status-meta" id="momentum-status-updated">
-        {% if momentum_status.updated_at %}最近更新：{{ momentum_status.updated_at }}{% else %}还没有生成记录{% endif %}
-      </p>
-    </article>
-
-    {% if momentum_payload %}
-      <article class="card insights-status-card">
-        <strong>分析范围</strong>
-        <p>基于 {{ momentum_payload.source_paper_count }} 篇已有“核心解读”的论文，当前已整理 {{ momentum_payload.window_count }} 个最近窗口。</p>
-        <p class="insights-status-meta">锚点日期：{{ momentum_payload.anchor_date }} · 生成时间：{{ momentum_payload.generated_at }}</p>
-      </article>
-    {% endif %}
-  </div>
-
-  {% if momentum_payload and momentum_payload.windows %}
-    <section class="momentum-window-grid">
-      {% for window in momentum_payload.windows %}
-        <article class="card momentum-window-card" id="momentum-{{ window.days }}">
-          <div class="insights-theme-head momentum-window-head">
-            <div>
-              <p class="eyebrow">{{ window.label }}</p>
-              <h3>{{ window.label }}</h3>
-              <p class="insights-theme-copy">{{ window.summary }}</p>
-            </div>
-            <div class="insights-theme-metrics">
-              <span>{{ window.paper_count }} 篇</span>
-              <span>{{ window.start_date }} -> {{ window.anchor_date }}</span>
-              <span>{% if window.llm_used %}LLM 已参与梳理{% else %}当前为规则回退稿{% endif %}</span>
-            </div>
+        <div class="insights-progress-inline" aria-label="Opportunity Map 生成进度">
+          <div class="insights-progress-bar insights-progress-bar-opportunity">
+            <span id="opportunity-progress-fill" style="width: {{ opportunity_status.progress or 0 }}%"></span>
           </div>
-
-          <div class="momentum-list-grid">
-            <section class="insights-panel momentum-panel">
-              <div class="insights-panel-head">
-                <h4>增长最快的 Topic</h4>
-                <span>最近突然升温的话题</span>
-              </div>
-              {% if window.hot_topics %}
-                <div class="momentum-signal-list">
-                  {% for item in window.hot_topics %}
-                    <article class="momentum-signal-item">
-                      <div class="momentum-signal-top">
-                        <strong>{{ item.name }}</strong>
-                        <span class="momentum-signal-meta">最近 {{ item.count }} · 前窗 {{ item.previous_count }}</span>
-                      </div>
-                      <p>{{ item.why }}</p>
-                      {% if item.papers %}
-                        <div class="insights-paper-mini-list">
-                          {% for paper in item.papers %}
-                            <a class="insights-paper-mini" href="{{ url_for('index', paper=paper.rel_path, tab='core-zh') }}" target="_blank" rel="noreferrer">
-                              <span>{{ paper.sort_date or 'unknown' }}</span>
-                              <strong>{{ paper.title }}</strong>
-                            </a>
-                          {% endfor %}
-                        </div>
-                      {% endif %}
-                    </article>
-                  {% endfor %}
-                </div>
-              {% else %}
-                <p class="insights-status-meta">这个窗口里还没有明显的话题增长信号。</p>
-              {% endif %}
-            </section>
-
-            <section class="insights-panel momentum-panel">
-              <div class="insights-panel-head">
-                <h4>被大量 Follow 的方法路线</h4>
-                <span>方法范式正在怎么迁移</span>
-              </div>
-              {% if window.method_routes %}
-                <div class="momentum-signal-list">
-                  {% for item in window.method_routes %}
-                    <article class="momentum-signal-item">
-                      <div class="momentum-signal-top">
-                        <strong>{{ item.name }}</strong>
-                        <span class="momentum-signal-meta">最近 {{ item.count }} · 前窗 {{ item.previous_count }}</span>
-                      </div>
-                      <p>{{ item.why }}</p>
-                      {% if item.papers %}
-                        <div class="insights-paper-mini-list">
-                          {% for paper in item.papers %}
-                            <a class="insights-paper-mini" href="{{ url_for('index', paper=paper.rel_path, tab='core-zh') }}" target="_blank" rel="noreferrer">
-                              <span>{{ paper.sort_date or 'unknown' }}</span>
-                              <strong>{{ paper.title }}</strong>
-                            </a>
-                          {% endfor %}
-                        </div>
-                      {% endif %}
-                    </article>
-                  {% endfor %}
-                </div>
-              {% else %}
-                <p class="insights-status-meta">这个窗口里还没有明显的方法升温信号。</p>
-              {% endif %}
-            </section>
-
-            <section class="insights-panel momentum-panel">
-              <div class="insights-panel-head">
-                <h4>Benchmark / Dataset / Eval 焦点</h4>
-                <span>最近评测与数据注意力落在哪</span>
-              </div>
-              {% if window.benchmark_focus %}
-                <div class="momentum-signal-list">
-                  {% for item in window.benchmark_focus %}
-                    <article class="momentum-signal-item">
-                      <div class="momentum-signal-top">
-                        <strong>{{ item.name }}</strong>
-                        <span class="momentum-signal-meta">最近 {{ item.count }} · 前窗 {{ item.previous_count }}</span>
-                      </div>
-                      <p>{{ item.why }}</p>
-                      {% if item.papers %}
-                        <div class="insights-paper-mini-list">
-                          {% for paper in item.papers %}
-                            <a class="insights-paper-mini" href="{{ url_for('index', paper=paper.rel_path, tab='core-zh') }}" target="_blank" rel="noreferrer">
-                              <span>{{ paper.sort_date or 'unknown' }}</span>
-                              <strong>{{ paper.title }}</strong>
-                            </a>
-                          {% endfor %}
-                        </div>
-                      {% endif %}
-                    </article>
-                  {% endfor %}
-                </div>
-              {% else %}
-                <p class="insights-status-meta">这个窗口里还没有明显的 benchmark / dataset / eval 聚焦变化。</p>
-              {% endif %}
-            </section>
-
-            <section class="insights-panel momentum-panel">
-              <div class="insights-panel-head">
-                <h4>快速聚集的边缘信号</h4>
-                <span>小方向开始形成早期密度</span>
-              </div>
-              {% if window.emerging_edges %}
-                <div class="momentum-signal-list">
-                  {% for item in window.emerging_edges %}
-                    <article class="momentum-signal-item">
-                      <div class="momentum-signal-top">
-                        <strong>{{ item.name }}</strong>
-                        <span class="momentum-signal-meta">{{ item.kind }} · 最近 {{ item.count }} · 前窗 {{ item.previous_count }}</span>
-                      </div>
-                      <p>{{ item.why }}</p>
-                      {% if item.papers %}
-                        <div class="insights-paper-mini-list">
-                          {% for paper in item.papers %}
-                            <a class="insights-paper-mini" href="{{ url_for('index', paper=paper.rel_path, tab='core-zh') }}" target="_blank" rel="noreferrer">
-                              <span>{{ paper.sort_date or 'unknown' }}</span>
-                              <strong>{{ paper.title }}</strong>
-                            </a>
-                          {% endfor %}
-                        </div>
-                      {% endif %}
-                    </article>
-                  {% endfor %}
-                </div>
-              {% else %}
-                <p class="insights-status-meta">这个窗口里还没有明显的边缘信号聚集。</p>
-              {% endif %}
-            </section>
-          </div>
-        </article>
-      {% endfor %}
-    </section>
-  {% else %}
-    <section class="card viewer-empty insights-empty-card">
-      <h3>还没有 Momentum Radar</h3>
-      <p>这部分会读取已有“核心解读”，对最近 30/60/90 天的论文做趋势归纳，告诉你现在什么在快速升温、什么只是噪声。</p>
-      <form action="{{ url_for('insights_momentum_rebuild_route') }}" method="post" class="inline-form centered-form">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <button type="submit">开始第一次生成</button>
-      </form>
-    </section>
-  {% endif %}
-</section>
-
-<section class="insights-shell insights-module-shell">
-  <div class="insights-head card insights-opportunity-head">
-    <div>
-      <p class="eyebrow">Opportunity</p>
-      <h2>Opportunity Map</h2>
-      <p class="sidebar-copy">沿着历史脉络和最近 momentum 往前走一步：哪些问题还没被解决，哪些 claim 说得多但证据薄，哪些热门方向已经开始拥挤，哪些低密度方向反而值得提前下注。</p>
-    </div>
-    <div class="insights-head-actions">
-      {% if opportunity_status.can_stop %}
-        <form action="{{ url_for('insights_opportunity_stop_route') }}" method="post" class="inline-form">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <button type="submit" class="secondary">停止</button>
-        </form>
-      {% endif %}
-      {% if opportunity_status.can_continue %}
-        <form action="{{ url_for('insights_opportunity_rebuild_route') }}" method="post" class="inline-form">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <button type="submit">继续</button>
-        </form>
-      {% else %}
-        <form action="{{ url_for('insights_opportunity_rebuild_route') }}" method="post" class="inline-form">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <button type="submit">{% if opportunity_status.cache_exists %}重新生成{% else %}构建 Opportunity Map{% endif %}</button>
-        </form>
-      {% endif %}
-    </div>
-  </div>
-
-  <div class="insights-status-grid">
-    <article class="card insights-status-card">
-      <strong>生成状态</strong>
-      <p id="opportunity-status-text">
-        {% if opportunity_status.state == 'running' %}
-          正在后台扫描核心解读并生成 Opportunity Map。
-        {% elif opportunity_status.state == 'stopping' %}
-          正在停止 Opportunity Map 任务，当前步骤收尾后会自动停下。
-        {% elif opportunity_status.state == 'stopped' %}
-          Opportunity Map 生成已暂停；当前进度已保存，可以稍后继续。
-        {% elif opportunity_status.state == 'failed' %}
-          上一次生成失败：{{ opportunity_status.error or '未知错误' }}
-        {% elif opportunity_status.state == 'ready' and opportunity_payload %}
-          Opportunity Map 已准备好，可以直接浏览下一步最值得下注的方向。
-        {% elif opportunity_payload %}
-          已加载最近一次保存的 Opportunity 草稿。
-        {% else %}
-          还没有生成 Opportunity Map，请先点击“构建 Opportunity Map”。
-        {% endif %}
-      </p>
-      <div class="insights-progress-shell" aria-label="Opportunity Map 生成进度">
-        <div class="insights-progress-bar insights-progress-bar-opportunity">
-          <span id="opportunity-progress-fill" style="width: {{ opportunity_status.progress or 0 }}%"></span>
-        </div>
-        <div class="insights-progress-meta">
           <strong id="opportunity-progress-value">{{ opportunity_status.progress or 0 }}%</strong>
         </div>
-        <p class="insights-progress-primary" id="opportunity-scan-text">
-          {% set opportunity_scan_total = opportunity_status.total_core_papers or (opportunity_payload.source_paper_count if opportunity_payload else 0) %}
-          {% set opportunity_scan_done = opportunity_status.scanned_core_papers or (opportunity_payload.source_paper_count if opportunity_payload else 0) %}
-          {% if opportunity_scan_total %}
-            核心解读扫描：{{ opportunity_scan_done }}/{{ opportunity_scan_total }} 篇
-          {% else %}
-            核心解读扫描：等待开始
-          {% endif %}
+        <p class="insights-progress-meta-line">
+          <span id="opportunity-scan-text">
+            {% set opportunity_scan_total = opportunity_status.total_core_papers or (opportunity_payload.source_paper_count if opportunity_payload else 0) %}
+            {% set opportunity_scan_done = opportunity_status.scanned_core_papers or (opportunity_payload.source_paper_count if opportunity_payload else 0) %}
+            {% if opportunity_scan_total %}
+              核心解读扫描：{{ opportunity_scan_done }}/{{ opportunity_scan_total }} 篇
+            {% else %}
+              核心解读扫描：等待开始
+            {% endif %}
+          </span>
+          <span id="opportunity-progress-stage">
+            {% if opportunity_status.total_sections %}
+              机会模块：{{ opportunity_status.completed_sections }}/{{ opportunity_status.total_sections }} 个{% if opportunity_status.current_section_label %} · 当前：{{ opportunity_status.current_section_label }}{% endif %}
+            {% endif %}
+          </span>
+          <span id="opportunity-status-updated">{% if opportunity_status.updated_at %}更新于 {{ opportunity_status.updated_at }}{% endif %}</span>
         </p>
-        <span class="insights-progress-secondary" id="opportunity-progress-stage">
-          {% if opportunity_status.total_sections %}
-            机会模块：{{ opportunity_status.completed_sections }}/{{ opportunity_status.total_sections }} 个
-            {% if opportunity_status.current_section_label %} · 当前：{{ opportunity_status.current_section_label }}{% endif %}
+        <div class="insights-module-actions">
+          {% if opportunity_status.can_stop %}
+            <form action="{{ url_for('insights_opportunity_stop_route') }}" method="post" class="inline-form">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button type="submit" class="secondary">停止</button>
+            </form>
+          {% elif opportunity_status.can_continue %}
+            <form action="{{ url_for('insights_opportunity_rebuild_route') }}" method="post" class="inline-form">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button type="submit">继续</button>
+            </form>
           {% else %}
-            机会模块：等待开始
+            <form action="{{ url_for('insights_opportunity_rebuild_route') }}" method="post" class="inline-form">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button type="submit">{% if opportunity_status.cache_exists %}重新生成{% else %}构建 Opportunity Map{% endif %}</button>
+            </form>
           {% endif %}
-        </span>
+        </div>
       </div>
-      <p class="insights-status-meta" id="opportunity-status-updated">
-        {% if opportunity_status.updated_at %}最近更新：{{ opportunity_status.updated_at }}{% else %}还没有生成记录{% endif %}
-      </p>
-    </article>
+    </header>
 
-    {% if opportunity_payload %}
-      <article class="card insights-status-card">
-        <strong>分析范围</strong>
-        <p>基于 {{ opportunity_payload.source_paper_count }} 篇已有“核心解读”的论文，并结合 {{ opportunity_payload.history_theme_count }} 条历史主线与 {{ opportunity_payload.momentum_window_count }} 个 momentum 窗口。</p>
-        <p class="insights-status-meta">锚点日期：{{ opportunity_payload.anchor_date }} · 生成时间：{{ opportunity_payload.generated_at }}</p>
-      </article>
-    {% endif %}
-  </div>
-
-  {% if opportunity_payload and opportunity_payload.sections %}
-    <section class="opportunity-section-grid">
-      {% for section in opportunity_payload.sections %}
-        <article class="card opportunity-section-card" id="opportunity-{{ section.slug }}">
-          <div class="insights-theme-head opportunity-section-head">
-            <div>
-              <p class="eyebrow">{{ section.label }}</p>
-              <h3>{{ section.label }}</h3>
-              <p class="insights-theme-copy">{{ section.description }}</p>
+    {% if opportunity_payload and opportunity_payload.sections %}
+      <div class="opportunity-section-grid">
+        {% for section in opportunity_payload.sections %}
+          <article class="card opportunity-section-card" id="opportunity-{{ section.slug }}">
+            <div class="insights-theme-head opportunity-section-head">
+              <div>
+                <p class="eyebrow">{{ section.label }}</p>
+                <h3>{{ section.label }}</h3>
+                <p class="insights-theme-copy">{{ section.description }}</p>
+              </div>
+              <div class="insights-theme-metrics">
+                <span>{{ section.item_count }} 个判断</span>
+                <span>{% if section.llm_used %}LLM 已参与梳理{% else %}当前为规则回退稿{% endif %}</span>
+              </div>
             </div>
-            <div class="insights-theme-metrics">
-              <span>{{ section.item_count }} 个判断</span>
-              <span>{% if section.llm_used %}LLM 已参与梳理{% else %}当前为规则回退稿{% endif %}</span>
-            </div>
-          </div>
-          <section class="insights-panel opportunity-summary-panel">
-            <h4>模块摘要</h4>
-            <p>{{ section.summary }}</p>
-          </section>
-          {% if section['items'] %}
-            <div class="opportunity-item-grid">
-              {% for item in section['items'] %}
-                <section class="insights-panel opportunity-item-card">
-                  <div class="opportunity-item-top">
-                    <h4>{{ item.title }}</h4>
-                    <span class="momentum-signal-meta">{{ item.stats_line }}</span>
-                  </div>
-                  <p><strong>为什么值得关注：</strong>{{ item.why }}</p>
-                  <p><strong>依据：</strong>{{ item.evidence }}</p>
-                  <p><strong>下一步下注：</strong>{{ item.next_bet }}</p>
-                  {% if item.papers %}
-                    <div class="insights-paper-mini-list">
-                      {% for paper in item.papers %}
-                        <a class="insights-paper-mini" href="{{ url_for('index', paper=paper.rel_path, tab='core-zh') }}" target="_blank" rel="noreferrer">
-                          <span>{{ paper.sort_date or 'unknown' }}</span>
-                          <strong>{{ paper.title }}</strong>
-                        </a>
-                      {% endfor %}
-                    </div>
-                  {% endif %}
-                </section>
-              {% endfor %}
-            </div>
-          {% else %}
             <section class="insights-panel opportunity-summary-panel">
-              <p class="insights-status-meta">当前还没有形成足够强的机会判断。</p>
+              <h4>模块摘要</h4>
+              <p>{{ section.summary }}</p>
             </section>
-          {% endif %}
-        </article>
-      {% endfor %}
-    </section>
-  {% else %}
-    <section class="card viewer-empty insights-empty-card">
-      <h3>还没有 Opportunity Map</h3>
-      <p>这部分会在历史脉络与 momentum 之上继续往前一步，产出一个 next-bet memo：现在真正值得做什么，而不是继续无止境地多读几篇。</p>
-      <form action="{{ url_for('insights_opportunity_rebuild_route') }}" method="post" class="inline-form centered-form">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <button type="submit">开始第一次生成</button>
-      </form>
-    </section>
-  {% endif %}
+            {% if section['items'] %}
+              <div class="opportunity-item-grid">
+                {% for item in section['items'] %}
+                  <section class="insights-panel opportunity-item-card">
+                    <div class="opportunity-item-top">
+                      <h4>{{ item.title }}</h4>
+                      <span class="momentum-signal-meta">{{ item.stats_line }}</span>
+                    </div>
+                    <p><strong>为什么值得关注：</strong>{{ item.why }}</p>
+                    <p><strong>依据：</strong>{{ item.evidence }}</p>
+                    <p><strong>下一步下注：</strong>{{ item.next_bet }}</p>
+                    {% if item.papers %}
+                      <div class="insights-paper-mini-list">
+                        {% for paper in item.papers %}
+                          <a class="insights-paper-mini" href="{{ url_for('index', paper=paper.rel_path, tab='core-zh') }}" target="_blank" rel="noreferrer">
+                            <span>{{ paper.sort_date or 'unknown' }}</span>
+                            <strong>{{ paper.title }}</strong>
+                          </a>
+                        {% endfor %}
+                      </div>
+                    {% endif %}
+                  </section>
+                {% endfor %}
+              </div>
+            {% else %}
+              <section class="insights-panel opportunity-summary-panel">
+                <p class="insights-status-meta">当前还没有形成足够强的机会判断。</p>
+              </section>
+            {% endif %}
+          </article>
+        {% endfor %}
+      </div>
+    {% endif %}
+  </section>
 </section>
 {% endblock %}
 {% block scripts %}
@@ -667,7 +594,7 @@
               progressStage.textContent = stageBuilder(data);
             }
             if (updatedText) {
-              updatedText.textContent = data.updated_at ? `最近更新：${data.updated_at}` : "还没有生成记录";
+              updatedText.textContent = data.updated_at ? `更新于 ${data.updated_at}` : "";
             }
             if (refreshOnDoneStates.has(data.state)) {
               setTimeout(() => window.location.reload(), 2000);
@@ -698,7 +625,7 @@
           if (data.total_themes) {
             return `历史主线：${data.completed_themes || 0}/${data.total_themes} 条${data.current_theme_label ? ` · 当前：${data.current_theme_label}` : ""}`;
           }
-          return "历史主线：等待开始";
+          return "";
         }
       });
 
@@ -718,7 +645,7 @@
           if (data.total_windows) {
             return `研究热区窗口：${data.completed_windows || 0}/${data.total_windows} 个${data.current_window_label ? ` · 当前：${data.current_window_label}` : ""}`;
           }
-          return "研究热区窗口：等待开始";
+          return "";
         }
       });
 
@@ -738,7 +665,7 @@
           if (data.total_sections) {
             return `机会模块：${data.completed_sections || 0}/${data.total_sections} 个${data.current_section_label ? ` · 当前：${data.current_section_label}` : ""}`;
           }
-          return "机会模块：等待开始";
+          return "";
         }
       });
     })();

@@ -2400,3 +2400,131 @@ table {
     display: none;
   }
 }
+
+/* ---------------------------------------------------------- insights page */
+
+.insights-shell {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 32px 24px 96px;
+  display: grid;
+  gap: 48px;
+}
+
+.insights-page-head h2 {
+  margin: 4px 0 0;
+  font-family: var(--font-display);
+  font-size: clamp(28px, 2.2vw, 42px);
+  line-height: 1.12;
+  letter-spacing: -0.025em;
+}
+
+.insights-page-lede {
+  max-width: 720px;
+  margin: 12px 0 0;
+  font-size: var(--text-body);
+  line-height: 1.7;
+}
+
+.insights-module {
+  display: grid;
+  gap: 24px;
+  border-top: var(--border-strong);
+  padding-top: 24px;
+}
+
+.insights-module-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
+.insights-module-title {
+  min-width: 0;
+  max-width: 560px;
+}
+
+.insights-module-title h3 {
+  margin: 4px 0 0;
+  font-family: var(--font-display);
+  font-size: var(--text-section);
+  line-height: 1.2;
+}
+
+.insights-lede {
+  margin: 8px 0 0;
+  color: var(--ink-60);
+  font-size: var(--text-ui);
+  line-height: 1.6;
+}
+
+.insights-module-status {
+  display: grid;
+  gap: 8px;
+  min-width: min(360px, 100%);
+  justify-items: start;
+}
+
+.insights-status-line {
+  margin: 0;
+  font-size: var(--text-ui);
+  color: var(--ink);
+  line-height: 1.5;
+}
+
+.insights-progress-inline {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+
+.insights-progress-inline .insights-progress-bar {
+  flex: 1 1 auto;
+  height: 4px;
+  background: var(--hairline);
+  border-radius: 0;
+  overflow: hidden;
+}
+
+.insights-progress-inline .insights-progress-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--sapphire);
+  transition: width var(--motion);
+}
+
+.insights-progress-inline strong {
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-label);
+  color: var(--ink-60);
+}
+
+.insights-progress-meta-line {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font-size: var(--text-label);
+  color: var(--ink-60);
+  font-variant-numeric: tabular-nums;
+}
+
+.insights-module-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.insights-module-actions button {
+  min-height: 34px;
+  padding: 5px 14px;
+  font-size: var(--text-label);
+}
+
+@media (max-width: 999.98px) {
+  .insights-shell {
+    padding: 24px 16px 96px;
+  }
+}
