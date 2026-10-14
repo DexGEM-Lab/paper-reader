@@ -2867,6 +2867,21 @@ def create_app(
             requested_by_display_name=actor.display_name,
         )
 
+    def submit_discovery_import_action(discovery_id: int, actor: TeamUser) -> ActionRecord:
+        candidate = app.team_store.get_discovery(discovery_id)  # type: ignore[attr-defined]
+        if candidate is None:
+            raise KeyError(discovery_id)
+        if candidate.status != "new":
+            raise ValueError(f"Discovery has already been {candidate.status}.")
+        return app.action_queue.submit(  # type: ignore[attr-defined]
+            kind="discovery-import",
+            title=f"发现导入：{candidate.title}",
+            payload={"discovery_id": candidate.id},
+            source="discovery-import",
+            requested_by_user_id=actor.id,
+            requested_by_display_name=actor.display_name,
+        )
+
     def submit_source_import_action(day_record: Any, selected: list[Any], actor: TeamUser) -> ActionRecord:
         title = f"来源归档导入：{day_record.run_date}（{len(selected)} 篇）"
         return app.action_queue.submit(  # type: ignore[attr-defined]
@@ -3217,6 +3232,38 @@ def create_app(
         report(100, str(result["_final_message"]), result)
         return result
 
+    def perform_discovery_import_action(
+        action: ActionRecord,
+        report: Callable[[int, str, dict[str, Any] | None], None],
+        should_abort: Callable[[], bool],
+    ) -> dict[str, Any]:
+        discovery_id = int(action.payload.get("discovery_id") or 0)
+        candidate = app.team_store.get_discovery(discovery_id)  # type: ignore[attr-defined]
+        if candidate is None:
+            raise ValueError("发现候选不存在。")
+        if candidate.status != "new":
+            raise ValueError("这条发现已经处理过了。")
+        remote_action = replace(
+            action,
+            kind="remote-import",
+            source="discovery-import",
+            payload={
+                "raw_targets": candidate.url,
+                "recommendation_reason": f"发现推荐：{candidate.reason}",
+            },
+        )
+        result = perform_remote_import_action(remote_action, report, should_abort)
+        summary = result.get("summary") if isinstance(result, dict) else None
+        succeeded = isinstance(summary, dict) and any(int(summary.get(status) or 0) for status in ("saved", "duplicate", "existing"))
+        if not succeeded:
+            raise RuntimeError("发现候选没有成功导入，已保留在收件箱。")
+        if action.requested_by_user_id is None:
+            raise RuntimeError("发现导入缺少执行用户。")
+        app.team_store.decide_discovery(discovery_id, status="imported", decided_by=action.requested_by_user_id)  # type: ignore[attr-defined]
+        result["discovery_id"] = discovery_id
+        result["_final_message"] = f"{result.get('_final_message', '导入完成。')} 已标记为已导入。"
+        return result
+
     def perform_source_import_action(
         action: ActionRecord,
         report: Callable[[int, str, dict[str, Any] | None], None],
@@ -3439,6 +3486,7 @@ def create_app(
         return result
 
     app.action_queue.register_handler("remote-import", perform_remote_import_action)  # type: ignore[attr-defined]
+    app.action_queue.register_handler("discovery-import", perform_discovery_import_action)  # type: ignore[attr-defined]
     app.action_queue.register_handler("source-import", perform_source_import_action)  # type: ignore[attr-defined]
     app.action_queue.register_handler("ai-tags", perform_ai_tag_action)  # type: ignore[attr-defined]
     app.action_queue.register_handler("upload-import", perform_upload_import_action)  # type: ignore[attr-defined]
@@ -4849,8 +4897,7 @@ def create_app(
             flash("这条发现已经处理过了。", "error")
             return redirect(url_for("discover_index"))
         try:
-            task = submit_remote_import_action(candidate.url, f"发现推荐：{candidate.reason}", actor)
-            app.team_store.decide_discovery(discovery_id, status="imported", decided_by=actor.id)  # type: ignore[attr-defined]
+            task = submit_discovery_import_action(discovery_id, actor)
             flash(f"已加入导入队列：{task.title}", "success")
         except (KeyError, ValueError) as exc:
             flash(str(exc), "error")

@@ -4,7 +4,6 @@ import html
 import json
 import tempfile
 import unittest
-from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -200,14 +199,14 @@ class DiscoveryRouteTests(unittest.TestCase):
         self.app.discovery_scheduler.stop()
         self.tempdir.cleanup()
 
-    def test_import_action_enqueues_canonical_arxiv_and_marks_candidate(self) -> None:
+    def test_import_action_enqueues_discovery_import_and_keeps_candidate_until_success(self) -> None:
         candidate = self.app.team_store.list_discoveries()[0]
-        with patch.object(self.app.action_queue, "submit", return_value=SimpleNamespace(title="远程导入")) as submit:
+        with patch.object(self.app.action_queue, "submit", return_value=SimpleNamespace(title="发现导入")) as submit:
             response = self.client.post(f"/discover/{candidate.id}/import", follow_redirects=False)
         self.assertEqual(response.status_code, 302)
-        self.assertEqual(self.app.team_store.get_discovery(candidate.id).status, "imported")
-        self.assertEqual(submit.call_args.kwargs["kind"], "remote-import")
-        self.assertEqual(submit.call_args.kwargs["payload"]["raw_targets"], "https://arxiv.org/abs/2601.40001")
+        self.assertEqual(self.app.team_store.get_discovery(candidate.id).status, "new")
+        self.assertEqual(submit.call_args.kwargs["kind"], "discovery-import")
+        self.assertEqual(submit.call_args.kwargs["payload"]["discovery_id"], candidate.id)
 
     def test_dismiss_action_marks_candidate(self) -> None:
         candidate = self.app.team_store.list_discoveries()[0]
