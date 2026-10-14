@@ -13,6 +13,7 @@ import json
 import sys
 import time
 from collections import OrderedDict
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,8 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src.paper_reader.app import create_app  # noqa: E402
 from src.paper_reader.config import load_config  # noqa: E402
+from src.paper_reader.llm import get_llm_client  # noqa: E402
+from src.paper_reader.screening import candidate_packet, screen_packets  # noqa: E402
 from src.paper_reader.web_resources import classify_import_target  # noqa: E402
 
 TERMINAL_STATUSES = {"completed", "failed", "stopped"}
@@ -35,6 +38,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--library-root", type=Path, help="Override PAPER_READER_LIBRARY_DIR")
     parser.add_argument("--as-user", help="Existing local username credited as importer and used for automatic prompt jobs")
     parser.add_argument("--timeout", type=float, default=300.0, help="Maximum seconds to wait for each queued import")
+    parser.add_argument("--screen", action="store_true", help="Fail closed unless the semantic LLM screen returns KEEP for each URL")
+    parser.add_argument("--screen-model", default="deepseek-flash", help="LiteLLM model for --screen (default: deepseek-flash)")
+    parser.add_argument("--screen-qps", type=float, help="Override LLM QPS for --screen")
     return parser.parse_args(argv)
 
 
@@ -115,8 +121,36 @@ def main(argv: list[str] | None = None) -> int:
                 }
             )
 
+    screening_decisions: dict[str, Any] = {}
+    if args.screen:
+        if args.screen_qps is not None and args.screen_qps <= 0:
+            raise ValueError("--screen-qps must be positive")
+        screening_config = load_config()
+        if args.screen_qps is not None:
+            screening_config = replace(screening_config, llm_qps=args.screen_qps)
+        packets = [
+            candidate_packet(
+                url=url,
+                title=target.canonical_url,
+                kind=target.resource_kind,
+                context_text="\n".join(record["context_text"] for record in provenance if record["context_text"]),
+            )
+            for url, provenance, target in classified
+        ]
+        for decision in screen_packets(packets, get_llm_client(screening_config), model=args.screen_model):
+            screening_decisions[decision.url] = decision
+        screened: list[tuple[str, list[dict[str, str]], Any]] = []
+        for url, provenance, target in classified:
+            decision = screening_decisions[url]
+            emit({"url": url, "status": f"screen-{decision.decision}", "reason": decision.reason, "error": decision.error})
+            if decision.decision == "keep" and decision.error is None:
+                screened.append((url, provenance, target))
+            else:
+                failures += 1
+        classified = screened
+
     if args.dry_run:
-        emit({"summary": {"input_records": len(records), "unique_urls": len(grouped), "valid": len(classified), "invalid": failures}})
+        emit({"summary": {"input_records": len(records), "unique_urls": len(grouped), "valid": len(classified), "invalid_or_screened_out": failures}})
         return 1 if failures else 0
 
     runtime_config = load_config()
