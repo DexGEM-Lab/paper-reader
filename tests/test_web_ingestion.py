@@ -35,6 +35,7 @@ from src.paper_reader.web_resources import (
 
 
 PUBLIC_DNS = [(2, 1, 6, "", ("93.184.216.34", 443))]
+FIXTURES = Path(__file__).with_name("fixtures")
 ARTICLE_HTML = b"""<!doctype html>
 <html><head><title>Research systems in practice</title>
 <meta name="author" content="Ada Researcher">
@@ -283,6 +284,74 @@ class RichContentTests(unittest.TestCase):
             store.delete_snapshot(snapshot.rel_path)
             self.assertFalse((root / snapshot.rel_path).exists())
             self.assertFalse(asset_dir.exists())
+
+    def test_project_fixture_reads_inline_without_brand_or_html_noise(self) -> None:
+        page_url = "https://project.example.org/research"
+        page = (FIXTURES / "project_reader_mode.html").read_bytes()
+        fetched_urls: list[str] = []
+
+        def fake_fetch(url: str, **kwargs):  # noqa: ANN003
+            fetched_urls.append(url)
+            if url == page_url:
+                return fetched(page, url=url)
+            return fetched(b"x" * (41 * 1024), url=url, content_type="image/jpeg" if url.endswith(".jpg") else "image/png")
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            store = WebResourceStore(root)
+            with patch("src.paper_reader.web_resources.fetch_public_url", side_effect=fake_fetch):
+                snapshot = store.fetch_and_store(classify_import_target(page_url))
+            metadata = store.metadata_for_rel_path(snapshot.rel_path)
+            assert metadata is not None
+            markdown = (root / snapshot.rel_path).read_text(encoding="utf-8")
+
+        assets = {asset["source_url"]: asset["local_url"] for asset in metadata["assets"]}
+        hero = assets["https://project.example.org/media/project-hero.jpg"]
+        method = assets["https://project.example.org/media/method-overview.png"]
+        poster = assets["https://project.example.org/media/demo-poster.jpg"]
+        self.assertLess(markdown.index(hero), markdown.index("The project introduces"))
+        self.assertLess(markdown.index("Before the method figure"), markdown.index(method))
+        self.assertLess(markdown.index(method), markdown.index("After the method figure"))
+        self.assertLess(markdown.index("Before the demo"), markdown.index(poster))
+        self.assertLess(markdown.index(poster), markdown.index("After the demo"))
+        self.assertIn("[![Project demo]", markdown)
+        self.assertIn("**Author:** Alice Researcher; Bob Scientist", markdown)
+        self.assertIn("1 Example University · 2 Example Robotics Lab", markdown)
+        self.assertNotIn("<sup>", markdown)
+        self.assertNotIn("&amp;", markdown)
+        self.assertNotIn("## Media", markdown)
+        self.assertNotIn("University Logo", markdown)
+        self.assertNotIn("Privacy", markdown)
+        self.assertFalse(any("university-logo" in url or "twitter-card" in url or "twitter-icon" in url for url in fetched_urls))
+
+    def test_blog_fixture_keeps_images_between_their_paragraphs(self) -> None:
+        page_url = "https://blog.example.org/tactile-policy"
+        page = (FIXTURES / "blog_reader_mode.html").read_bytes()
+
+        def fake_fetch(url: str, **kwargs):  # noqa: ANN003
+            if url == page_url:
+                return fetched(page, url=url)
+            return fetched(b"x" * (41 * 1024), url=url, content_type="image/webp")
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            store = WebResourceStore(root)
+            with patch("src.paper_reader.web_resources.fetch_public_url", side_effect=fake_fetch):
+                snapshot = store.fetch_and_store(classify_import_target(page_url))
+            metadata = store.metadata_for_rel_path(snapshot.rel_path)
+            assert metadata is not None
+            markdown = (root / snapshot.rel_path).read_text(encoding="utf-8")
+
+        assets = {asset["source_url"]: asset["local_url"] for asset in metadata["assets"]}
+        pipeline = assets["https://blog.example.org/images/pipeline-screenshot.webp"]
+        dashboard = assets["https://blog.example.org/images/policy-dashboard.webp"]
+        self.assertLess(markdown.index("Before the pipeline screenshot"), markdown.index(pipeline))
+        self.assertLess(markdown.index(pipeline), markdown.index("Between the two screenshots"))
+        self.assertLess(markdown.index("Between the two screenshots"), markdown.index(dashboard))
+        self.assertLess(markdown.index(dashboard), markdown.index("After the evaluation dashboard"))
+        self.assertNotIn("Author avatar", markdown)
+        self.assertNotIn("Share badge", markdown)
+        self.assertNotIn("## Media", markdown)
 
     def test_github_repository_uses_api_for_root_tree_blob_and_release_pages(self) -> None:
         repo_payload = {

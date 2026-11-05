@@ -1,0 +1,22 @@
+<!doctype html>
+<html>
+<head>
+  <title>Building a Tactile Robot Policy</title>
+  <meta name="author" content="Dana Engineer">
+  <meta property="og:site_name" content="Research Engineering Notes">
+</head>
+<body>
+  <nav class="social-navigation"><img src="/icons/avatar.png" alt="Author avatar" width="64" height="64">Archive · About · Subscribe</nav>
+  <article>
+    <h1>Building a Tactile Robot Policy</h1>
+    <p>This engineering article describes how tactile observations are synchronized with robot actions before policy training begins.</p>
+    <h2>Data pipeline</h2>
+    <p>Before the pipeline screenshot, timestamps are aligned and invalid sensor packets are removed from every training trajectory.</p>
+    <img src="/images/pipeline-screenshot.webp" alt="Tactile data pipeline" width="800" height="500">
+    <p>Between the two screenshots, the post explains batching, augmentation, and the checks used to catch corrupt demonstrations.</p>
+    <img src="/images/policy-dashboard.webp" alt="Policy evaluation dashboard" width="820" height="520">
+    <p>After the evaluation dashboard, the article compares deployment success rates and analyzes the most common grasp failures.</p>
+  </article>
+  <aside class="share-buttons"><img src="/icons/social-badge.png" alt="Share badge" width="256" height="256"></aside>
+</body>
+</html>

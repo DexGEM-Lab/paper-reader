@@ -348,7 +348,9 @@ def _clean_label(value: object, *, limit: int = 240) -> str:
 
 def _sanitize_extracted_markdown(value: str) -> str:
     text = _unescape_fully(value).replace("\u00a0", " ")
+    text = re.sub(r"<(?:sup|sub)[^>]*>(.*?)</(?:sup|sub)>", r"\1 ", text, flags=re.IGNORECASE | re.DOTALL)
     text = _RAW_HTML_TAG_RE.sub("", text)
+    text = re.sub(r"[ \t]+([,.;:])", r"\1", text)
     lines: list[str] = []
     previous_plain = ""
     for raw_line in text.splitlines():
@@ -369,7 +371,7 @@ def _video_placeholder_url(url: str) -> str:
     return f"{_VIDEO_PLACEHOLDER_PREFIX}{digest}"
 
 
-def _video_details(tag: str, values: dict[str, str], element: Any, *, base_url: str) -> tuple[str, str] | None:
+def _video_details(tag: str, values: dict[str, str], element: Any, *, base_url: str) -> tuple[str, str, str | None] | None:
     if tag == "video":
         raw_url = values.get("src", "")
         if not raw_url:
@@ -378,7 +380,8 @@ def _video_details(tag: str, values: dict[str, str], element: Any, *, base_url: 
                 if raw_url:
                     break
         url = _public_absolute_url(base_url, raw_url)
-        return (url, _clean_label(values.get("title")) or "HTML5 video") if url else None
+        poster = _public_absolute_url(base_url, values.get("poster", ""))
+        return (url, _clean_label(values.get("title")) or "HTML5 video", poster) if url else None
     if tag != "iframe":
         return None
     url = _public_absolute_url(base_url, values.get("src", ""))
@@ -387,7 +390,7 @@ def _video_details(tag: str, values: dict[str, str], element: Any, *, base_url: 
     host = (urlsplit(url).hostname or "").casefold()
     if not any(_host_matches(host, known) for known in ("youtube.com", "youtu.be", "bilibili.com")):
         return None
-    return url, _clean_label(values.get("title")) or "Embedded video"
+    return url, _clean_label(values.get("title")) or "Embedded video", _youtube_thumbnail(url)
 
 
 def _html_with_video_placeholders(html_text: str, *, base_url: str) -> str:
@@ -401,9 +404,9 @@ def _html_with_video_placeholders(html_text: str, *, base_url: str) -> str:
         details = _video_details(tag, values, element, base_url=base_url)
         if not details:
             continue
-        url, title = details
+        url, title, poster = details
         placeholder = lxml_html.Element("img")
-        placeholder.set("src", _video_placeholder_url(url))
+        placeholder.set("src", poster or url)
         placeholder.set("alt", title)
         element.addprevious(placeholder)
     return lxml_html.tostring(document, encoding="unicode", method="html")
@@ -727,6 +730,10 @@ def _rewrite_inline_media(
         url = str(video.get("url") or "")
         if url:
             video_by_placeholder[_video_placeholder_url(url)] = video
+        video_by_placeholder[url] = video
+        poster_url = str(video.get("poster_url") or "")
+        if poster_url:
+            video_by_placeholder[poster_url] = video
     represented_assets: set[str] = set()
 
     def replace_image(match: re.Match[str]) -> str:
