@@ -1232,7 +1232,13 @@ class WebResourceStore:
         temporary.replace(metadata_path)
         return discovered
 
-    def fetch_and_store(self, target: ImportTarget, *, existing_rel_path: str | None = None) -> WebSnapshot:
+    def fetch_and_store(
+        self,
+        target: ImportTarget,
+        *,
+        existing_rel_path: str | None = None,
+        preserve_attachment_state: bool = False,
+    ) -> WebSnapshot:
         if target.route != "web":
             raise ValueError("Only web targets can be snapshot-extracted.")
         fetched_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -1298,6 +1304,7 @@ class WebResourceStore:
                 candidates = self._second_hop_candidates(first_hop, page_url=final_url or target.canonical_url)
                 content = _rewrite_inline_media(content, assets=assets, videos=videos)
 
+        previous_metadata = self.metadata_for_rel_path(existing_rel_path) if existing_rel_path and preserve_attachment_state else None
         metadata: dict[str, object] = {
             "schema_version": 3,
             "reader_mode_version": READER_MODE_VERSION if status == "ok" else None,
@@ -1323,6 +1330,10 @@ class WebResourceStore:
             "attachment_discovery": "pending" if status == "ok" else "unavailable",
             "rich_content_enriched_at": fetched_at if status == "ok" else None,
         }
+        if previous_metadata:
+            for key in ("attachment_discovery", "attachment_count", "rich_content_enriched_at"):
+                if key in previous_metadata:
+                    metadata[key] = previous_metadata[key]
         markdown = (
             _resource_markdown(title=title, metadata=metadata, content=content)
             if status == "ok"

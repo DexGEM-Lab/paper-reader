@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
 import time
 from dataclasses import replace
@@ -18,7 +19,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from src.paper_reader.app import create_app  # noqa: E402
 from src.paper_reader.config import load_config  # noqa: E402
 from src.paper_reader.llm import get_llm_client  # noqa: E402
-from src.paper_reader.web_resources import ImportTarget, classify_import_target  # noqa: E402
+from src.paper_reader.web_resources import READER_MODE_VERSION, ImportTarget, classify_import_target  # noqa: E402
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -27,6 +28,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--limit", type=int, help="Maximum number of pending web items to process")
     parser.add_argument("--qps", type=float, default=0.2, help="Maximum item processing rate (default: 0.2)")
     parser.add_argument("--model", help="Attachment judge model (default: PAPER_READER_LLM_CHEAP_MODEL)")
+    parser.add_argument(
+        "--reextract",
+        action="store_true",
+        help="Rebuild legacy web snapshots with reader-mode v2 while preserving sources and attachments",
+    )
     return parser.parse_args(argv)
 
 
@@ -37,6 +43,7 @@ def enrich_web_items(
     model: str,
     limit: int | None,
     qps: float,
+    reextract: bool = False,
     sleep_fn: Callable[[float], None] = time.sleep,
 ) -> dict[str, int]:
     if limit is not None and limit < 1:
@@ -48,18 +55,42 @@ def enrich_web_items(
     stats = {"scanned": len(records), "processed": 0, "skipped": 0, "failed": 0, "attachments": 0}
     interval = 1.0 / qps
     for record in records:
-        if app.library.web_resources.is_enriched(record.rel_path):
+        metadata = app.library.web_resources.metadata_for_rel_path(record.rel_path) or {}
+        if reextract:
+            try:
+                current_reader_version = int(metadata.get("reader_mode_version") or 0)
+            except (TypeError, ValueError):
+                current_reader_version = 0
+            if current_reader_version >= READER_MODE_VERSION:
+                stats["skipped"] += 1
+                continue
+        elif app.library.web_resources.is_enriched(record.rel_path):
             stats["skipped"] += 1
             continue
         if limit is not None and stats["processed"] + stats["failed"] >= limit:
             break
-        metadata = app.library.web_resources.metadata_for_rel_path(record.rel_path) or {}
         canonical_url = str(metadata.get("canonical_url") or record.source_url or "").strip()
         if not canonical_url:
             stats["failed"] += 1
             print(json.dumps({"rel_path": record.rel_path, "status": "failed", "error": "missing canonical URL"}, ensure_ascii=False))
             continue
         started = time.monotonic()
+        snapshot_path: Path | None = None
+        metadata_path: Path | None = None
+        old_markdown: bytes | None = None
+        old_metadata: bytes | None = None
+        asset_dir: Path | None = None
+        asset_backup: Path | None = None
+        if reextract and hasattr(app.library.web_resources, "library_root"):
+            snapshot_path = Path(app.library.web_resources.library_root) / record.rel_path
+            metadata_path = app.library.web_resources.metadata_path_for(snapshot_path)
+            old_markdown = snapshot_path.read_bytes() if snapshot_path.exists() else None
+            old_metadata = metadata_path.read_bytes() if metadata_path.exists() else None
+            asset_dir = app.library.web_resources._asset_dir_for(snapshot_path)
+            asset_backup = asset_dir.with_name(f".{asset_dir.name}.reader-v1-backup")
+            shutil.rmtree(asset_backup, ignore_errors=True)
+            if asset_dir.exists():
+                shutil.copytree(asset_dir, asset_backup)
         try:
             classified = classify_import_target(canonical_url)
             target = ImportTarget(
@@ -71,21 +102,40 @@ def enrich_web_items(
                 source_value=canonical_url,
                 source_url=canonical_url,
             ) if classified.route != "web" else classified
-            snapshot = app.library.web_resources.fetch_and_store(target, existing_rel_path=record.rel_path)
+            snapshot = app.library.web_resources.fetch_and_store(
+                target,
+                existing_rel_path=record.rel_path,
+                preserve_attachment_state=reextract,
+            )
+            if snapshot.fetch_status != "ok":
+                raise RuntimeError(snapshot.error or f"re-extraction returned {snapshot.fetch_status}")
             refreshed = app.library.build_record_for_rel_path(snapshot.rel_path, [])
             app.team_store.sync_papers([refreshed])
-            attachments = app.library.web_resources.discover_attachments(
-                snapshot.rel_path,
-                client=client,
-                model=model,
-            )
-            app.team_store.replace_attachments(snapshot.rel_path, attachments)
+            attachments = []
+            if not reextract:
+                attachments = app.library.web_resources.discover_attachments(
+                    snapshot.rel_path,
+                    client=client,
+                    model=model,
+                )
+                app.team_store.replace_attachments(snapshot.rel_path, attachments)
             stats["processed"] += 1
             stats["attachments"] += len(attachments)
-            print(json.dumps({"rel_path": record.rel_path, "status": "enriched", "assets": len((app.library.web_resources.metadata_for_rel_path(record.rel_path) or {}).get("assets") or []), "attachments": len(attachments)}, ensure_ascii=False))
+            print(json.dumps({"rel_path": record.rel_path, "status": "reextracted" if reextract else "enriched", "assets": len((app.library.web_resources.metadata_for_rel_path(record.rel_path) or {}).get("assets") or []), "attachments": "preserved" if reextract else len(attachments)}, ensure_ascii=False))
         except Exception as exc:
+            if reextract and snapshot_path is not None and metadata_path is not None:
+                if old_markdown is not None:
+                    snapshot_path.write_bytes(old_markdown)
+                if old_metadata is not None:
+                    metadata_path.write_bytes(old_metadata)
+                if asset_dir is not None and asset_backup is not None and asset_backup.exists():
+                    shutil.rmtree(asset_dir, ignore_errors=True)
+                    shutil.copytree(asset_backup, asset_dir)
             stats["failed"] += 1
             print(json.dumps({"rel_path": record.rel_path, "status": "failed", "error": str(exc)}, ensure_ascii=False))
+        finally:
+            if asset_backup is not None:
+                shutil.rmtree(asset_backup, ignore_errors=True)
         elapsed = time.monotonic() - started
         if elapsed < interval:
             sleep_fn(interval - elapsed)
@@ -108,6 +158,7 @@ def main(argv: list[str] | None = None) -> int:
             model=args.model or throttled_config.llm_cheap_model,
             limit=args.limit,
             qps=args.qps,
+            reextract=args.reextract,
         )
         print(json.dumps({"summary": stats}, ensure_ascii=False, sort_keys=True))
         return 1 if stats["failed"] else 0

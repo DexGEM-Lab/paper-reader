@@ -353,6 +353,44 @@ class RichContentTests(unittest.TestCase):
         self.assertNotIn("Share badge", markdown)
         self.assertNotIn("## Media", markdown)
 
+    def test_existing_snapshot_refresh_replaces_assets_and_preserves_attachment_state(self) -> None:
+        page_url = "https://example.com/project"
+        project_page = (FIXTURES / "project_reader_mode.html").read_bytes()
+
+        def initial_fetch(url: str, **kwargs):  # noqa: ANN003
+            if url == page_url:
+                return fetched(project_page, url=url)
+            return fetched(b"x" * (41 * 1024), url=url, content_type="image/png")
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            store = WebResourceStore(root)
+            with patch("src.paper_reader.web_resources.fetch_public_url", side_effect=initial_fetch):
+                first = store.fetch_and_store(classify_import_target(page_url))
+            snapshot_path = root / first.rel_path
+            asset_dir = snapshot_path.with_name(f"{snapshot_path.stem}.assets")
+            self.assertTrue(asset_dir.exists())
+            (asset_dir / "stale.png").write_bytes(b"stale")
+            metadata_path = snapshot_path.with_suffix(".json")
+            previous = json.loads(metadata_path.read_text(encoding="utf-8"))
+            previous.update(attachment_discovery="complete", attachment_count=2, rich_content_enriched_at="2026-01-01T00:00:00Z")
+            metadata_path.write_text(json.dumps(previous), encoding="utf-8")
+
+            with patch("src.paper_reader.web_resources.fetch_public_url", return_value=fetched(ARTICLE_HTML, url=page_url)):
+                store.fetch_and_store(
+                    classify_import_target(page_url),
+                    existing_rel_path=first.rel_path,
+                    preserve_attachment_state=True,
+                )
+
+            refreshed = store.metadata_for_rel_path(first.rel_path)
+            assert refreshed is not None
+            self.assertEqual(refreshed["attachment_discovery"], "complete")
+            self.assertEqual(refreshed["attachment_count"], 2)
+            self.assertEqual(refreshed["rich_content_enriched_at"], "2026-01-01T00:00:00Z")
+            self.assertEqual(refreshed["assets"], [])
+            self.assertFalse(asset_dir.exists())
+
     def test_github_repository_uses_api_for_root_tree_blob_and_release_pages(self) -> None:
         repo_payload = {
             "full_name": "DexGEM-Lab/robot-project",

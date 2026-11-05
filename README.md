@@ -121,6 +121,14 @@ PAPER_READER_LLM_CONTEXT_TOKENS=12000
 
 脚本直接使用与 Web UI 相同的 action queue、资料库和 SQLite store。默认 resume 行为会跳过已有 canonical URL；加 `--no-resume` 可刷新现有网页快照。每条飞书出处以 `source_type=feishu` 保存 chat name、消息上下文、发送者 open ID 和时间。
 
+已有网页快照升级到 reader-mode v2：
+
+```bash
+.venv/bin/python scripts/enrich_web_items.py --reextract --qps 0.2
+```
+
+该模式按 `reader_mode_version` 断点续跑，刷新正文和本地图片目录，同时保留 SQLite 中的来源、飞书 provenance 和附件记录；单条刷新失败会恢复原快照、元数据和图片。
+
 ## 生产部署（DexGEM）
 
 `reader.dex-gem.ai` 的生产拓扑为：公网 `:443` 的 nginx stream SNI 路由到本机 nginx TLS vhost（`127.0.0.1:8443`），该 vhost 再代理到仅监听回环地址的 Gunicorn（`127.0.0.1:8010`）。应用以 `paper-reader` 系统用户运行；代码位于 `/opt/paper-reader/app`，运行数据位于 `/opt/paper-reader/data`，凭据由 root 管理的 `/etc/paper-reader/{litellm.env,paper-reader.env}` 提供。
