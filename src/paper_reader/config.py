@@ -147,6 +147,7 @@ class PaperReaderConfig:
     fetch_max_bytes: int
     fetch_page_max_bytes: int
     fetch_max_redirects: int
+    github_token: str
     screen_imports: bool
     discovery_enabled: bool
     discovery_hour: int
@@ -256,6 +257,7 @@ def load_config(
             setting("PAPER_READER_FETCH_MAX_REDIRECTS", "10"),
             name="PAPER_READER_FETCH_MAX_REDIRECTS",
         ),
+        github_token=setting("PAPER_READER_GITHUB_TOKEN"),
         screen_imports=_bool_setting(
             setting("PAPER_READER_SCREEN_IMPORTS", "true"),
             name="PAPER_READER_SCREEN_IMPORTS",

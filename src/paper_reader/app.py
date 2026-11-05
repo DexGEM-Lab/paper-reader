@@ -422,6 +422,7 @@ class PaperLibrary:
         page_fetch_max_bytes: int = 25 * 1024 * 1024,
         document_fetch_max_bytes: int = 100 * 1024 * 1024,
         fetch_max_redirects: int = 10,
+        github_token: str = "",
     ):
         self.root = root.resolve()
         self.root.mkdir(parents=True, exist_ok=True)
@@ -437,6 +438,7 @@ class PaperLibrary:
             fetch_max_bytes=page_fetch_max_bytes,
             document_max_bytes=document_fetch_max_bytes,
             max_redirects=fetch_max_redirects,
+            github_token=github_token,
         )
         self.prompt_store = prompt_store
         self.team_store = team_store
@@ -2169,6 +2171,7 @@ def create_app(
         page_fetch_max_bytes=runtime_config.fetch_page_max_bytes,
         document_fetch_max_bytes=runtime_config.fetch_max_bytes,
         fetch_max_redirects=runtime_config.fetch_max_redirects,
+        github_token=runtime_config.github_token,
     )
     app.login_guard = LoginGuard()  # type: ignore[attr-defined]
     app.history_store = HistoricalInsightsStore(app.config["LIBRARY_ROOT"])  # type: ignore[attr-defined]

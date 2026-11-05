@@ -228,6 +228,7 @@ def fetch_public_url(
     max_bytes: int = DEFAULT_PAGE_MAX_BYTES,
     max_redirects: int = DEFAULT_MAX_REDIRECTS,
     user_agent: str = DEFAULT_USER_AGENT,
+    extra_headers: Mapping[str, str] | None = None,
     prefer_https: bool = True,
     resolver: Resolver = socket.getaddrinfo,
 ) -> FetchedResponse:
@@ -238,6 +239,7 @@ def fetch_public_url(
     """
 
     headers = {"User-Agent": user_agent, "Accept": accept, "Accept-Encoding": "identity"}
+    headers.update({str(key): str(value) for key, value in (extra_headers or {}).items()})
     validated_url = validate_public_url(url, resolver=resolver)
     upgraded = https_upgrade_candidate(validated_url) if prefer_https else None
     if upgraded:

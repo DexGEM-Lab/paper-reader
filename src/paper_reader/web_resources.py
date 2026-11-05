@@ -131,6 +131,16 @@ class WebSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
+class GitHubRepositoryContent:
+    content: str
+    title: str
+    author: str | None
+    published_date: str | None
+    site_name: str
+    images: list[dict[str, str]]
+
+
+@dataclass(frozen=True, slots=True)
 class AttachmentSelection:
     kind: str
     title: str
@@ -419,6 +429,45 @@ def _host_matches(host: str, domain: str) -> bool:
     return host == domain or host.endswith(f".{domain}")
 
 
+def _github_repository_coordinates(url: str) -> tuple[str, str, str] | None:
+    parsed = urlsplit(url)
+    if (parsed.hostname or "").casefold().rstrip(".") != "github.com":
+        return None
+    parts = [part for part in parsed.path.split("/") if part]
+    if len(parts) < 2 or parts[0].casefold() in {"features", "marketplace", "orgs", "search", "settings", "topics"}:
+        return None
+    owner = parts[0]
+    repository = re.sub(r"\.git$", "", parts[1], flags=re.IGNORECASE)
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", owner) or not re.fullmatch(r"[A-Za-z0-9_.-]+", repository):
+        return None
+    mode = "release" if len(parts) >= 3 and parts[2].casefold() in {"release", "releases"} else "repository"
+    return owner, repository, mode
+
+
+def _normalize_github_readme_images(content: str, *, base_url: str) -> tuple[str, list[dict[str, str]]]:
+    images: list[dict[str, str]] = []
+
+    def replace(match: re.Match[str]) -> str:
+        alt = _clean_label(match.group(1)) or "README image"
+        source_url = _public_absolute_url(base_url, match.group(2).strip("<>"))
+        marker = f"{alt} {source_url or ''}".casefold()
+        if not source_url or _MEDIA_JUNK_RE.search(marker):
+            return ""
+        images.append(
+            {
+                "url": source_url,
+                "alt": alt,
+                "role": "inline",
+                "width": "0",
+                "height": "0",
+                "marker": marker,
+            }
+        )
+        return f"![{alt}]({source_url})"
+
+    return _MARKDOWN_IMAGE_RE.sub(replace, content), images
+
+
 def _is_attachment_candidate(url: str, *, page_host: str, text: str) -> bool:
     parsed = urlsplit(url)
     host = (parsed.hostname or "").casefold().rstrip(".")
@@ -562,7 +611,20 @@ def extract_rich_references(html_text: str, *, base_url: str) -> dict[str, list[
     page_host = source_domain_for(base_url)
     seen_images: set[str] = set()
     images: list[dict[str, str]] = []
-    for item in [*parser.meta_images, *parser.images, *({"url": video["poster_url"], "alt": f"{video['title']} thumbnail", "role": "video-thumbnail"} for video in parser.videos if video.get("poster_url"))]:
+    for item in [
+        *parser.meta_images,
+        *parser.images,
+        *(
+            {
+                "url": video["poster_url"],
+                "alt": f"{video['title']} thumbnail",
+                "role": "video-thumbnail",
+                "marker": "video poster",
+            }
+            for video in parser.videos
+            if video.get("poster_url")
+        ),
+    ]:
         url = item.get("url", "")
         if url and url not in seen_images:
             seen_images.add(url)
@@ -620,13 +682,86 @@ def _published_sort_date(value: str | None) -> str | None:
     return sane_sort_date(value)
 
 
+def _image_dimensions(body: bytes, content_type: str) -> tuple[int, int]:
+    if content_type == "image/png" and len(body) >= 24 and body.startswith(b"\x89PNG\r\n\x1a\n"):
+        return int.from_bytes(body[16:20], "big"), int.from_bytes(body[20:24], "big")
+    if content_type == "image/gif" and len(body) >= 10 and body[:6] in {b"GIF87a", b"GIF89a"}:
+        return int.from_bytes(body[6:8], "little"), int.from_bytes(body[8:10], "little")
+    if content_type == "image/jpeg" and body.startswith(b"\xff\xd8"):
+        offset = 2
+        while offset + 9 < len(body):
+            if body[offset] != 0xFF:
+                offset += 1
+                continue
+            marker = body[offset + 1]
+            if marker in {0xD8, 0xD9}:
+                offset += 2
+                continue
+            if offset + 4 > len(body):
+                break
+            length = int.from_bytes(body[offset + 2 : offset + 4], "big")
+            if length < 2 or offset + 2 + length > len(body):
+                break
+            if marker in {0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF}:
+                return int.from_bytes(body[offset + 7 : offset + 9], "big"), int.from_bytes(body[offset + 5 : offset + 7], "big")
+            offset += 2 + length
+    if content_type == "image/webp" and len(body) >= 30 and body[:4] == b"RIFF" and body[8:12] == b"WEBP":
+        chunk = body[12:16]
+        if chunk == b"VP8X":
+            return 1 + int.from_bytes(body[24:27], "little"), 1 + int.from_bytes(body[27:30], "little")
+        if chunk == b"VP8L" and body[20] == 0x2F:
+            bits = int.from_bytes(body[21:25], "little")
+            return (bits & 0x3FFF) + 1, ((bits >> 14) & 0x3FFF) + 1
+    return 0, 0
+
+
+def _rewrite_inline_media(
+    content: str,
+    *,
+    assets: list[dict[str, str]],
+    videos: list[dict[str, str]],
+) -> str:
+    asset_by_source = {asset["source_url"]: asset for asset in assets}
+    video_by_placeholder: dict[str, dict[str, str]] = {}
+    for video in videos:
+        url = str(video.get("url") or "")
+        if url:
+            video_by_placeholder[_video_placeholder_url(url)] = video
+    represented_assets: set[str] = set()
+
+    def replace_image(match: re.Match[str]) -> str:
+        alt, source_url = match.group(1), html.unescape(match.group(2).strip("<>"))
+        video = video_by_placeholder.get(source_url)
+        if video is not None:
+            title = _clean_label(video.get("title") or alt) or "Video"
+            poster = asset_by_source.get(str(video.get("poster_url") or ""))
+            if poster is not None:
+                represented_assets.add(poster["source_url"])
+                return f"[![{title}]({poster['local_url']})]({video['url']})"
+            return f"[▶ {title}]({video['url']})"
+        asset = asset_by_source.get(source_url)
+        if asset is None:
+            return ""
+        represented_assets.add(source_url)
+        clean_alt = _clean_label(alt) or str(asset.get("alt") or "Page image")
+        return f"![{clean_alt}]({asset['local_url']})"
+
+    rewritten = _MARKDOWN_IMAGE_RE.sub(replace_image, content)
+    hero_lines = [
+        f"![{_clean_label(asset.get('alt')) or 'Hero image'}]({asset['local_url']})"
+        for asset in assets
+        if asset.get("role") == "hero" and asset.get("source_url") not in represented_assets
+    ]
+    if hero_lines:
+        rewritten = "\n\n".join([*hero_lines, rewritten])
+    return _sanitize_extracted_markdown(rewritten)
+
+
 def _resource_markdown(
     *,
     title: str,
     metadata: dict[str, object],
     content: str,
-    assets: list[dict[str, str]] | None = None,
-    videos: list[dict[str, str]] | None = None,
 ) -> str:
     lines = [f"# {title}", ""]
     author = str(metadata.get("author") or "").strip()
@@ -639,13 +774,6 @@ def _resource_markdown(
     if site_name:
         lines.append(f"**Site:** {site_name}")
     lines.append(f"**Original:** {metadata['canonical_url']}")
-    media_lines: list[str] = []
-    for asset in assets or []:
-        media_lines.extend([f"![{asset.get('alt') or 'Page image'}]({asset['local_url']})", ""])
-    for video in videos or []:
-        media_lines.append(f"[{video.get('title') or 'Video'}]({video['url']})")
-    if media_lines:
-        lines.extend(["", "## Media", "", *media_lines])
     lines.extend(["", "---", "", content.strip(), ""])
     return "\n".join(lines)
 
@@ -736,11 +864,13 @@ class WebResourceStore:
         fetch_max_bytes: int = 25 * 1024 * 1024,
         document_max_bytes: int = 100 * 1024 * 1024,
         max_redirects: int = 10,
+        github_token: str = "",
     ):
         self.library_root = library_root.resolve()
         self.fetch_max_bytes = fetch_max_bytes
         self.document_max_bytes = document_max_bytes
         self.max_redirects = max_redirects
+        self.github_token = github_token.strip()
         self.web_root = self.library_root / WEB_ROOT_NAME
         self.web_root.mkdir(parents=True, exist_ok=True)
         self._write_lock = threading.Lock()
@@ -760,6 +890,102 @@ class WebResourceStore:
         except (OSError, json.JSONDecodeError):
             return None
         return payload if isinstance(payload, dict) and payload.get("resource_kind") else None
+
+    def _github_headers(self, *, accept: str) -> dict[str, str]:
+        headers = {"X-GitHub-Api-Version": "2022-11-28"}
+        if self.github_token:
+            headers["Authorization"] = f"Bearer {self.github_token}"
+        headers["Accept"] = accept
+        return headers
+
+    def _fetch_github_json(self, url: str) -> dict[str, Any]:
+        response = fetch_public_url(
+            url,
+            accept="application/vnd.github+json",
+            extra_headers=self._github_headers(accept="application/vnd.github+json"),
+            max_bytes=self.fetch_max_bytes,
+            max_redirects=self.max_redirects,
+        )
+        try:
+            payload = json.loads(response.body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise WebExtractionError("GitHub API returned invalid JSON.") from exc
+        if not isinstance(payload, dict):
+            raise WebExtractionError("GitHub API returned an unexpected payload.")
+        return payload
+
+    def _extract_github_repository(self, url: str) -> GitHubRepositoryContent | None:
+        coordinates = _github_repository_coordinates(url)
+        if coordinates is None:
+            return None
+        owner, repository, mode = coordinates
+        api_root = f"https://api.github.com/repos/{quote(owner)}/{quote(repository)}"
+        repo = self._fetch_github_json(api_root)
+        full_name = _clean_label(repo.get("full_name")) or f"{owner}/{repository}"
+        description = _clean_label(repo.get("description"), limit=1000)
+        owner_name = _clean_label((repo.get("owner") or {}).get("login") if isinstance(repo.get("owner"), dict) else owner)
+        topics = [_clean_label(topic, limit=80) for topic in (repo.get("topics") or []) if _clean_label(topic, limit=80)]
+        license_value = repo.get("license") or {}
+        license_name = ""
+        if isinstance(license_value, dict):
+            license_name = _clean_label(license_value.get("spdx_id") or license_value.get("name"), limit=100)
+        default_branch = _clean_label(repo.get("default_branch"), limit=200) or "main"
+        lines = [f"# {full_name}"]
+        if description:
+            lines.extend(["", description])
+        facts = [f"Stars: {int(repo.get('stargazers_count') or 0):,}"]
+        if license_name:
+            facts.append(f"License: {license_name}")
+        pushed_at = _clean_label(repo.get("pushed_at"), limit=80)
+        if pushed_at:
+            facts.append(f"Last pushed: {pushed_at}")
+        lines.extend(["", " · ".join(facts)])
+        if topics:
+            lines.extend(["", f"Topics: {', '.join(topics)}"])
+
+        readme_images: list[dict[str, str]] = []
+        try:
+            readme_response = fetch_public_url(
+                f"{api_root}/readme",
+                accept="application/vnd.github.raw",
+                extra_headers=self._github_headers(accept="application/vnd.github.raw"),
+                max_bytes=self.fetch_max_bytes,
+                max_redirects=self.max_redirects,
+            )
+            readme = readme_response.body.decode("utf-8", errors="replace").strip()
+        except Exception:
+            readme = ""
+        if readme:
+            raw_base = f"https://raw.githubusercontent.com/{quote(owner)}/{quote(repository)}/{quote(default_branch)}/"
+            readme, readme_images = _normalize_github_readme_images(readme, base_url=raw_base)
+            lines.extend(["", "## README", "", readme])
+
+        if mode == "release":
+            try:
+                release = self._fetch_github_json(f"{api_root}/releases/latest")
+            except Exception:
+                release = {}
+            if release:
+                release_title = _clean_label(release.get("name") or release.get("tag_name")) or "Latest release"
+                release_date = _clean_label(release.get("published_at"), limit=80)
+                release_body = _sanitize_extracted_markdown(str(release.get("body") or ""))
+                lines.extend(["", f"## Latest release: {release_title}"])
+                if release_date:
+                    lines.extend(["", f"Published: {release_date}"])
+                if release_body:
+                    lines.extend(["", release_body])
+
+        content = _sanitize_extracted_markdown("\n".join(lines))
+        if len(re.sub(r"\s+", " ", content)) < 40:
+            raise WebExtractionError("GitHub API returned no meaningful repository content.")
+        return GitHubRepositoryContent(
+            content=content,
+            title=full_name,
+            author=owner_name or None,
+            published_date=pushed_at or None,
+            site_name="GitHub",
+            images=readme_images,
+        )
 
     def _path_for(self, target: ImportTarget, *, existing_rel_path: str | None = None, title: str | None = None) -> Path:
         if existing_rel_path:
@@ -815,6 +1041,12 @@ class WebResourceStore:
         downloaded: list[dict[str, str]] = []
         for image in images[:MAX_ASSETS_PER_ITEM]:
             source_url = image["url"]
+            is_hero = image.get("role") == "hero"
+            declared_width = int(image.get("width") or 0)
+            declared_height = int(image.get("height") or 0)
+            marker = str(image.get("marker") or "")
+            if not is_hero and (declared_width and declared_width < MIN_INLINE_IMAGE_WIDTH):
+                continue
             try:
                 response = fetch_public_url(
                     source_url,
@@ -829,6 +1061,15 @@ class WebResourceStore:
                     if guessed not in set(_IMAGE_CONTENT_TYPES.values()):
                         raise WebExtractionError(f"Expected an image asset, received {content_type or 'unknown content type'}.")
                     suffix = guessed
+                width, height = _image_dimensions(response.body, content_type)
+                width = width or declared_width
+                height = height or declared_height
+                if not is_hero and len(response.body) < MIN_INLINE_IMAGE_BYTES:
+                    continue
+                if not is_hero and width and width < MIN_INLINE_IMAGE_WIDTH:
+                    continue
+                if not is_hero and width and height and width / max(height, 1) > 4 and _NAV_BANNER_RE.search(marker):
+                    continue
                 digest = hashlib.sha256(source_url.encode("utf-8")).hexdigest()[:16]
                 asset_path = asset_dir / f"{digest}{suffix}"
                 asset_dir.mkdir(parents=True, exist_ok=True)
@@ -843,6 +1084,8 @@ class WebResourceStore:
                         "alt": image.get("alt") or "Page image",
                         "role": image.get("role") or "inline",
                         "content_type": content_type,
+                        "width": width,
+                        "height": height,
                     }
                 )
             except Exception:
@@ -994,20 +1237,33 @@ class WebResourceStore:
         error: str | None = None
         content = ""
         html_text = ""
+        reference_images: list[dict[str, str]] = []
+        extraction_method = "reader-mode-html"
         status = "ok"
         try:
-            response = fetch_public_url(
-                target.raw_url,
-                max_bytes=self.fetch_max_bytes,
-                max_redirects=self.max_redirects,
-            )
-            final_url = response.final_url
-            html_text = response.body.decode("utf-8", errors="replace")
-            content, extracted = extract_web_content(response, resource_kind=target.resource_kind)
-            title = sanitize_title(extracted.get("title") or title) or title
-            author = str(extracted.get("author") or "").strip() or None
-            published_date = _published_sort_date(str(extracted.get("date") or "").strip())
-            site_name = str(extracted.get("sitename") or "").strip() or None
+            github = self._extract_github_repository(target.canonical_url)
+            if github is not None:
+                final_url = target.canonical_url
+                content = github.content
+                title = sanitize_title(github.title) or title
+                author = github.author
+                published_date = _published_sort_date(github.published_date)
+                site_name = github.site_name
+                reference_images = github.images
+                extraction_method = "github-api"
+            else:
+                response = fetch_public_url(
+                    target.raw_url,
+                    max_bytes=self.fetch_max_bytes,
+                    max_redirects=self.max_redirects,
+                )
+                final_url = response.final_url
+                html_text = response.body.decode("utf-8", errors="replace")
+                content, extracted = extract_web_content(response, resource_kind=target.resource_kind)
+                title = sanitize_title(extracted.get("title") or title) or title
+                author = _clean_label(extracted.get("author"), limit=500) or None
+                published_date = _published_sort_date(str(extracted.get("date") or "").strip())
+                site_name = _clean_label(extracted.get("sitename"), limit=240) or None
         except Exception as exc:
             error = str(exc)
             lowered = error.casefold()
@@ -1017,22 +1273,28 @@ class WebResourceStore:
         assets: list[dict[str, str]] = []
         videos: list[dict[str, str]] = []
         candidates: list[dict[str, str]] = []
-        if status == "ok" and html_text:
-            references = extract_rich_references(html_text, base_url=final_url or target.canonical_url)
-            assets = self._download_assets(references["images"], snapshot_path=path)
-            videos = references["videos"]
-            first_hop = list(references["candidates"])
-            seen_candidate_urls = {candidate["url"] for candidate in first_hop}
-            for video in videos:
-                if video["url"] not in seen_candidate_urls:
-                    first_hop.append({"url": video["url"], "text": video.get("title") or "Embedded video"})
-                    seen_candidate_urls.add(video["url"])
-            candidates = self._second_hop_candidates(first_hop, page_url=final_url or target.canonical_url)
-            for asset in assets:
-                content = content.replace(f"]({asset['source_url']})", f"]({asset['local_url']})")
+        if status == "ok":
+            shutil.rmtree(self._asset_dir_for(path), ignore_errors=True)
+            if extraction_method == "github-api":
+                assets = self._download_assets(reference_images, snapshot_path=path)
+                content = _rewrite_inline_media(content, assets=assets, videos=[])
+            elif html_text:
+                references = extract_rich_references(html_text, base_url=final_url or target.canonical_url)
+                assets = self._download_assets(references["images"], snapshot_path=path)
+                videos = references["videos"]
+                first_hop = list(references["candidates"])
+                seen_candidate_urls = {candidate["url"] for candidate in first_hop}
+                for video in videos:
+                    if video["url"] not in seen_candidate_urls:
+                        first_hop.append({"url": video["url"], "text": video.get("title") or "Embedded video"})
+                        seen_candidate_urls.add(video["url"])
+                candidates = self._second_hop_candidates(first_hop, page_url=final_url or target.canonical_url)
+                content = _rewrite_inline_media(content, assets=assets, videos=videos)
 
         metadata: dict[str, object] = {
-            "schema_version": 2,
+            "schema_version": 3,
+            "reader_mode_version": READER_MODE_VERSION if status == "ok" else None,
+            "extraction_method": extraction_method,
             "canonical_url": target.canonical_url,
             "original_url": target.raw_url,
             "final_url": final_url,
@@ -1055,7 +1317,7 @@ class WebResourceStore:
             "rich_content_enriched_at": fetched_at if status == "ok" else None,
         }
         markdown = (
-            _resource_markdown(title=title, metadata=metadata, content=content, assets=assets, videos=videos)
+            _resource_markdown(title=title, metadata=metadata, content=content)
             if status == "ok"
             else _failed_markdown(title=title, url=target.canonical_url, status=status, error=error or "unknown error")
         )

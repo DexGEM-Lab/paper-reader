@@ -32,7 +32,10 @@
 - `PAPER_READER_FETCH_MAX_BYTES=104857600`（PDF/文档远程下载上限，默认 100 MiB）
 - `PAPER_READER_PAGE_FETCH_MAX_BYTES=26214400`（网页快照抓取上限，默认 25 MiB）
 - `PAPER_READER_FETCH_MAX_REDIRECTS=10`（远程抓取允许的重定向跳数，默认 10）
+- `PAPER_READER_GITHUB_TOKEN=`（可选的只读 GitHub PAT；未设置时 GitHub API 匿名额度为 60 次/小时）
 - `PAPER_READER_SCREEN_IMPORTS=true`（默认开启：普通网页抓取后用 cheap model 语义筛选；arXiv/OpenReview/直链 PDF 跳过）
+
+GitHub 仓库、`/tree/`、`/blob/` 和 `/releases` 链接通过 `api.github.com` 提取仓库元数据、README 和最新 release notes，不依赖 GitHub 的网页 DOM。
 
 `PAPER_READER_LIBRARY_DIR` 和 `PAPER_READER_SOURCES_ARCHIVE_DIR` 覆盖各自目录；未设置时从 `PAPER_READER_DATA_DIR` 派生。主论文库、SQLite 协作数据、Prompt 结果和 Sources 归档都在这些目录中，不随 Git 提交。
 

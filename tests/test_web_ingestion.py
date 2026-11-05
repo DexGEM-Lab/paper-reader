@@ -93,11 +93,13 @@ class NetutilsTests(unittest.TestCase):
                 "PAPER_READER_FETCH_MAX_BYTES": str(120 * 1024 * 1024),
                 "PAPER_READER_PAGE_FETCH_MAX_BYTES": str(20 * 1024 * 1024),
                 "PAPER_READER_FETCH_MAX_REDIRECTS": "12",
+                "PAPER_READER_GITHUB_TOKEN": "github-test-token",
             },
         )
         self.assertEqual(config.fetch_max_bytes, 120 * 1024 * 1024)
         self.assertEqual(config.fetch_page_max_bytes, 20 * 1024 * 1024)
         self.assertEqual(config.fetch_max_redirects, 12)
+        self.assertEqual(config.github_token, "github-test-token")
         self.assertTrue(config.screen_imports)
 
     def test_document_fetch_accepts_over_25mib_when_configured(self) -> None:
@@ -263,7 +265,7 @@ class RichContentTests(unittest.TestCase):
             def fake_fetch(url: str, **kwargs):  # noqa: ANN003
                 if url == "https://example.com/project":
                     return fetched(page, url=url)
-                return fetched(b"image-bytes", url=url, content_type="image/png")
+                return fetched(b"x" * (41 * 1024), url=url, content_type="image/png")
 
             store = WebResourceStore(root)
             with patch("src.paper_reader.web_resources.fetch_public_url", side_effect=fake_fetch):
@@ -275,11 +277,70 @@ class RichContentTests(unittest.TestCase):
             markdown = (root / snapshot.rel_path).read_text(encoding="utf-8")
             self.assertIn("/files/Web/", markdown)
             self.assertNotIn("https://example.com/hero.jpg", markdown)
+            self.assertNotIn("## Media", markdown)
             asset_dir = (root / snapshot.rel_path).with_name(f"{Path(snapshot.rel_path).stem}.assets")
             self.assertEqual(len(list(asset_dir.glob("*"))), MAX_ASSETS_PER_ITEM)
             store.delete_snapshot(snapshot.rel_path)
             self.assertFalse((root / snapshot.rel_path).exists())
             self.assertFalse(asset_dir.exists())
+
+    def test_github_repository_uses_api_for_root_tree_blob_and_release_pages(self) -> None:
+        repo_payload = {
+            "full_name": "DexGEM-Lab/robot-project",
+            "description": "Research code for dexterous robot learning.",
+            "stargazers_count": 321,
+            "topics": ["robotics", "imitation-learning"],
+            "license": {"spdx_id": "Apache-2.0"},
+            "pushed_at": "2026-10-12T01:02:03Z",
+            "default_branch": "main",
+            "owner": {"login": "DexGEM-Lab"},
+        }
+        release_payload = {
+            "name": "Benchmark v2",
+            "tag_name": "v2.0.0",
+            "published_at": "2026-10-01T00:00:00Z",
+            "body": "Adds <sup>2</sup> evaluation suites &amp; stronger baselines.",
+        }
+        readme = b"""# Robot Project\n\nThe README explains training, evaluation, and benchmark results.\n\n![Architecture](docs/architecture.png)\n\nThe architecture figure appears before the ablation discussion.\n"""
+        calls: list[tuple[str, dict]] = []
+
+        def fake_fetch(url: str, **kwargs):  # noqa: ANN003
+            calls.append((url, kwargs))
+            if url.endswith("/readme"):
+                return fetched(readme, url=url, content_type="text/plain")
+            if url.endswith("/releases/latest"):
+                return fetched(json.dumps(release_payload).encode(), url=url, content_type="application/json")
+            if url.startswith("https://raw.githubusercontent.com/"):
+                return fetched(b"x" * (41 * 1024), url=url, content_type="image/png")
+            if url == "https://api.github.com/repos/dexgem-lab/robot-project":
+                return fetched(json.dumps(repo_payload).encode(), url=url, content_type="application/json")
+            raise AssertionError(f"unexpected fetch: {url}")
+
+        urls = [
+            "https://github.com/DexGEM-Lab/robot-project",
+            "https://github.com/DexGEM-Lab/robot-project/tree/main/examples",
+            "https://github.com/DexGEM-Lab/robot-project/blob/main/README.md",
+            "https://github.com/DexGEM-Lab/robot-project/releases",
+        ]
+        with tempfile.TemporaryDirectory() as tempdir:
+            store = WebResourceStore(Path(tempdir), github_token="test-pat")
+            with patch("src.paper_reader.web_resources.fetch_public_url", side_effect=fake_fetch):
+                snapshots = [store.fetch_and_store(classify_import_target(url)) for url in urls]
+            for snapshot in snapshots:
+                self.assertEqual(snapshot.fetch_status, "ok")
+                markdown = (Path(tempdir) / snapshot.rel_path).read_text(encoding="utf-8")
+                self.assertIn("Research code for dexterous robot learning", markdown)
+                self.assertIn("## README", markdown)
+                self.assertIn("/files/Web/", markdown)
+                self.assertNotIn("<sup>", markdown)
+            release_markdown = (Path(tempdir) / snapshots[-1].rel_path).read_text(encoding="utf-8")
+            self.assertIn("## Latest release: Benchmark v2", release_markdown)
+            self.assertIn("Adds 2 evaluation suites & stronger baselines", release_markdown)
+
+        self.assertFalse(any(url.startswith("https://github.com/") for url, _ in calls))
+        api_calls = [kwargs for url, kwargs in calls if url.startswith("https://api.github.com/")]
+        self.assertTrue(api_calls)
+        self.assertTrue(all(kwargs["extra_headers"]["Authorization"] == "Bearer test-pat" for kwargs in api_calls))
 
     def test_attachment_judge_parsing_enforces_three_item_cap(self) -> None:
         candidates = [{"url": f"https://example.com/file-{index}.pdf", "text": f"Paper {index}"} for index in range(5)]
