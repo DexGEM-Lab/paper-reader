@@ -90,8 +90,7 @@ def process_event(payload: dict[str, Any], db_path: Path, queue: Any, allowed: f
     urls = extract_urls(content)
     if not urls:
         return
-    # A single queued action avoids partial enqueue across URLs. The SQLite write lock
-    # serializes duplicate callbacks, even across threads/processes.
+    # Persist each accepted URL separately, so retries resume after a partial enqueue.
     context = " ".join(_text_fragments(content).split())[:200]
     sender_id = sender.get("sender_id") or {}
     sender_open_id = sender_id.get("open_id", "") if isinstance(sender_id, dict) else ""
@@ -104,14 +103,17 @@ def process_event(payload: dict[str, Any], db_path: Path, queue: Any, allowed: f
                    "message_id": str(message.get("message_id") or ""), "sender_open_id": sender_open_id,
                    "context_text": context, "msg_time_iso": time_iso, "url": url} for url in urls]
     with sqlite3.connect(db_path, timeout=10) as db:
-        db.execute("CREATE TABLE IF NOT EXISTS feishu_processed_events (event_id TEXT PRIMARY KEY)")
-        db.execute("BEGIN IMMEDIATE")
-        if db.execute("SELECT 1 FROM feishu_processed_events WHERE event_id = ?", (event_id,)).fetchone():
-            return
-        queue.submit(kind="remote-import", title=f"飞书链接导入（{len(urls)} 项）",
-                     payload={"raw_targets": "\n".join(urls), "recommendation_reason": "", "provenance": provenance},
-                     source="feishu")
-        db.execute("INSERT INTO feishu_processed_events VALUES (?)", (event_id,))
+        db.execute("CREATE TABLE IF NOT EXISTS feishu_event_urls (event_id TEXT, url TEXT, PRIMARY KEY (event_id, url))")
+        for url, entry in zip(urls, provenance):
+            db.execute("BEGIN IMMEDIATE")
+            if db.execute("SELECT 1 FROM feishu_event_urls WHERE event_id = ? AND url = ?", (event_id, url)).fetchone():
+                db.commit()
+                continue
+            queue.submit(kind="remote-import", title=f"飞书链接导入：{url}",
+                         payload={"raw_targets": url, "recommendation_reason": "", "provenance": [entry]},
+                         source="feishu")
+            db.execute("INSERT INTO feishu_event_urls VALUES (?, ?)", (event_id, url))
+            db.commit()
     LOGGER.info("Feishu event queued: chat=%s message=%s links=%d", chat_id, message.get("message_id"), len(urls))
 
 

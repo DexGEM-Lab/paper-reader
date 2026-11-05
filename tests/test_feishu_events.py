@@ -72,7 +72,7 @@ def test_bot_and_post(app):
     app.action_queue.submit.assert_not_called()
     p['event']['sender']['sender_type'] = 'user'
     assert c.post('/feishu/events', json=p).status_code == 200
-    assert app.action_queue.submit.call_args.kwargs['payload']['raw_targets'] == 'https://arxiv.org/abs/1\nhttps://x.org/t'
+    assert [call.kwargs['payload']['raw_targets'] for call in app.action_queue.submit.call_args_list] == ['https://arxiv.org/abs/1', 'https://x.org/t']
     assert extract_urls({'text': 'https://a.org, https://a.org'}) == ['https://a.org']
 
 
@@ -116,3 +116,16 @@ def test_dedup_persists_and_source_message_id(app):
     app.team_store.add_source('item.md', source_type='feishu', source_value='oc_allowed', source_url='https://example.org/a', source_context='context', sender_open_id='ou_sender', message_id='om_1')
     reloaded = TeamStore(app.config['LIBRARY_ROOT'])
     assert reloaded.sources_for_rel_path('item.md')[0]['message_id'] == 'om_1'
+
+
+def test_partial_enqueue_retry_only_remaining(app):
+    c = app.test_client()
+    p = event({'text': 'https://a.org https://b.org'})
+    app.action_queue.submit.side_effect = [None, RuntimeError('failure')]
+    with pytest.raises(RuntimeError):
+        c.post('/feishu/events', json=p)
+    app.action_queue.submit.reset_mock()
+    app.action_queue.submit.side_effect = None
+    assert c.post('/feishu/events', json=p).status_code == 200
+    assert app.action_queue.submit.call_args.kwargs['payload']['raw_targets'] == 'https://b.org'
+    assert app.action_queue.submit.call_count == 1
