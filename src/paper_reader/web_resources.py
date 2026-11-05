@@ -86,7 +86,7 @@ _MEDIA_CONTAINER_JUNK_RE = re.compile(
 )
 _NAV_BANNER_RE = re.compile(r"(?:^|[-_/.:\s])(banner|navbar|navigation|masthead|header|promo)(?:[-_/.:\s]|$)", re.IGNORECASE)
 _MARKDOWN_IMAGE_RE = re.compile(r"!\[([^\]\n]*)\]\((\S+?)(?:\s+[\"'][^\"']*[\"'])?\)")
-_RAW_HTML_TAG_RE = re.compile(r"</?[A-Za-z][^>]*>|<!--.*?-->", re.DOTALL)
+_RAW_HTML_TAG_RE = re.compile(r"</?[A-Za-z][A-Za-z0-9-]*(?:\s[^>]*)?\s*/?>|<!--.*?-->", re.DOTALL)
 _VIDEO_PLACEHOLDER_PREFIX = "https://paper-reader.invalid/video/"
 
 

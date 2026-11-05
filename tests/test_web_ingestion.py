@@ -407,7 +407,7 @@ class RichContentTests(unittest.TestCase):
             "name": "Benchmark v2",
             "tag_name": "v2.0.0",
             "published_at": "2026-10-01T00:00:00Z",
-            "body": "Adds <sup>2</sup> evaluation suites &amp; stronger baselines.",
+            "body": "Adds <sup>2</sup> evaluation suites &amp; stronger baselines. See <https://docs.example.com/v2>.",
         }
         readme = b"""# Robot Project\n\nThe README explains training, evaluation, and benchmark results.\n\n![Architecture](docs/architecture.png)\n\nThe architecture figure appears before the ablation discussion.\n"""
         calls: list[tuple[str, dict]] = []
@@ -444,6 +444,7 @@ class RichContentTests(unittest.TestCase):
             release_markdown = (Path(tempdir) / snapshots[-1].rel_path).read_text(encoding="utf-8")
             self.assertIn("## Latest release: Benchmark v2", release_markdown)
             self.assertIn("Adds 2 evaluation suites & stronger baselines", release_markdown)
+            self.assertIn("<https://docs.example.com/v2>", release_markdown)
 
         self.assertFalse(any(url.startswith("https://github.com/") for url, _ in calls))
         api_calls = [kwargs for url, kwargs in calls if url.startswith("https://api.github.com/")]

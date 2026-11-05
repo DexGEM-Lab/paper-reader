@@ -81,17 +81,17 @@ def enrich_web_items(
         old_metadata: bytes | None = None
         asset_dir: Path | None = None
         asset_backup: Path | None = None
-        if reextract and hasattr(app.library.web_resources, "library_root"):
-            snapshot_path = Path(app.library.web_resources.library_root) / record.rel_path
-            metadata_path = app.library.web_resources.metadata_path_for(snapshot_path)
-            old_markdown = snapshot_path.read_bytes() if snapshot_path.exists() else None
-            old_metadata = metadata_path.read_bytes() if metadata_path.exists() else None
-            asset_dir = app.library.web_resources._asset_dir_for(snapshot_path)
-            asset_backup = asset_dir.with_name(f".{asset_dir.name}.reader-v1-backup")
-            shutil.rmtree(asset_backup, ignore_errors=True)
-            if asset_dir.exists():
-                shutil.copytree(asset_dir, asset_backup)
         try:
+            if reextract and hasattr(app.library.web_resources, "library_root"):
+                snapshot_path = Path(app.library.web_resources.library_root) / record.rel_path
+                metadata_path = app.library.web_resources.metadata_path_for(snapshot_path)
+                old_markdown = snapshot_path.read_bytes() if snapshot_path.exists() else None
+                old_metadata = metadata_path.read_bytes() if metadata_path.exists() else None
+                asset_dir = app.library.web_resources._asset_dir_for(snapshot_path)
+                asset_backup = asset_dir.with_name(f".{asset_dir.name}.reader-v1-backup")
+                shutil.rmtree(asset_backup, ignore_errors=True)
+                if asset_dir.exists():
+                    shutil.copytree(asset_dir, asset_backup)
             classified = classify_import_target(canonical_url)
             target = ImportTarget(
                 raw_url=canonical_url,
@@ -128,9 +128,10 @@ def enrich_web_items(
                     snapshot_path.write_bytes(old_markdown)
                 if old_metadata is not None:
                     metadata_path.write_bytes(old_metadata)
-                if asset_dir is not None and asset_backup is not None and asset_backup.exists():
+                if asset_dir is not None:
                     shutil.rmtree(asset_dir, ignore_errors=True)
-                    shutil.copytree(asset_backup, asset_dir)
+                    if asset_backup is not None and asset_backup.exists():
+                        shutil.copytree(asset_backup, asset_dir)
             stats["failed"] += 1
             print(json.dumps({"rel_path": record.rel_path, "status": "failed", "error": str(exc)}, ensure_ascii=False))
         finally:
