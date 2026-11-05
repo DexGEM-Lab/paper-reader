@@ -583,6 +583,10 @@ class TeamStore:
                 if name not in columns:
                     conn.execute(f"ALTER TABLE paper_sources ADD COLUMN {name} TEXT")
 
+        columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(paper_sources)").fetchall()}
+        if "message_id" not in columns:
+            conn.execute("ALTER TABLE paper_sources ADD COLUMN message_id TEXT")
+
         conn.execute("CREATE INDEX IF NOT EXISTS idx_paper_sources_paper_id ON paper_sources(paper_id)")
         conn.execute(
             """
@@ -1183,6 +1187,7 @@ class TeamStore:
         source_context: str | None = None,
         sender_open_id: str | None = None,
         message_time_iso: str | None = None,
+        message_id: str | None = None,
         imported_by_user_id: int | None = None,
     ) -> None:
         normalized_source_value = self._normalize_source_value(source_type, source_value)
@@ -1229,19 +1234,20 @@ class TeamStore:
                     WHERE paper_id = ? AND source_type = ? AND source_value = ?
                       AND COALESCE(source_url, '') = COALESCE(?, '')
                       AND COALESCE(message_time_iso, '') = COALESCE(?, '')
+                      AND COALESCE(message_id, '') = COALESCE(?, '')
                     ORDER BY id DESC LIMIT 1
                     """,
-                    (paper_id, source_type, normalized_source_value, source_url, message_time_iso),
+                    (paper_id, source_type, normalized_source_value, source_url, message_time_iso, message_id),
                 ).fetchone()
                 if existing is None:
                     conn.execute(
                         """
                         INSERT INTO paper_sources(
                             paper_id, source_type, source_value, source_url, source_context,
-                            sender_open_id, message_time_iso, imported_by_user_id, created_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            sender_open_id, message_time_iso, imported_by_user_id, created_at, message_id
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
-                        values,
+                        (*values, message_id),
                     )
                 else:
                     conn.execute(
@@ -1309,7 +1315,7 @@ class TeamStore:
                 return []
             rows = conn.execute(
                 """
-                SELECT source_type, source_value, source_url, source_context, sender_open_id, message_time_iso
+                SELECT source_type, source_value, source_url, source_context, sender_open_id, message_time_iso, message_id
                 FROM paper_sources WHERE paper_id = ? ORDER BY created_at DESC, id DESC
                 """,
                 (paper_id,),
@@ -1322,6 +1328,7 @@ class TeamStore:
                 "source_context": (str(row["source_context"]) if row["source_context"] else None),
                 "sender_open_id": (str(row["sender_open_id"]) if row["sender_open_id"] else None),
                 "message_time_iso": (str(row["message_time_iso"]) if row["message_time_iso"] else None),
+                "message_id": (str(row["message_id"]) if row["message_id"] else None),
             }
             for row in rows
         ]

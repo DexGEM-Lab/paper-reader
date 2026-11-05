@@ -131,6 +131,9 @@ class PaperReaderConfig:
     feishu_app_secret: str
     feishu_api_base_url: str
     feishu_allowed_chat_id: str
+    feishu_event_token: str
+    feishu_encrypt_key: str
+    feishu_monitor_chat_ids: frozenset[str]
     auth_mode: str
     auth_mode_is_default: bool
     session_ttl_hours: int
@@ -223,6 +226,9 @@ def load_config(
             setting("PAPER_READER_FEISHU_API_BASE_URL", DEFAULT_FEISHU_API_BASE_URL)
         ),
         feishu_allowed_chat_id=setting("PAPER_READER_FEISHU_ALLOWED_CHAT_ID"),
+        feishu_event_token=setting("PAPER_READER_FEISHU_EVENT_TOKEN"),
+        feishu_encrypt_key=setting("PAPER_READER_FEISHU_ENCRYPT_KEY"),
+        feishu_monitor_chat_ids=frozenset(x.strip() for x in setting("PAPER_READER_FEISHU_MONITOR_CHAT_IDS").split(",") if x.strip()),
         auth_mode=auth_mode,
         auth_mode_is_default=not bool(raw_auth_mode),
         session_ttl_hours=_positive_int_setting(

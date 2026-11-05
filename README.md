@@ -382,3 +382,9 @@ paper-reader-source/scripts/run_huggingface_daily_service.sh
 - 默认运行数据写到启动目录下的 `data/`，不会跟随仓库提交
 - 日志目录 `logs/` 默认不会提交到 Git
 - 运行过程中生成的本地状态文件也已加入 `.gitignore`
+
+### Feishu group link monitoring
+
+`POST /feishu/events` receives Feishu event callbacks without an interactive login. Set `PAPER_READER_FEISHU_EVENT_TOKEN` to the app's Verification Token and set `PAPER_READER_FEISHU_MONITOR_CHAT_IDS` to a comma-separated list of group chat IDs. An empty allowlist ignores every group. Add the bot to each monitored group and subscribe the app to `im.message.receive_v1`; grant the required group-message read permission and publish/approve a new version if prompted. Feishu validates the HTTPS request URL when saving, so deploy the endpoint and token before completing console configuration.
+
+If the console's Encrypt Key is activated, set `PAPER_READER_FEISHU_ENCRYPT_KEY` to the same value; encrypted callbacks require a valid Feishu signature. With no encrypt key configured, encrypted callbacks are rejected. Never commit these secrets. Accepted user text and rich-text links enter the existing screened remote-import queue silently; Feishu provenance is recorded with the imported item. Event IDs are stored in `.paper-reader-feishu-events.sqlite3` in the library directory; include that file in backups and preserve it across restarts. In a crash between queue persistence and event-ID commit, Feishu's retry can create a duplicate action. The action queue itself is designed for the deployment's single Gunicorn worker, not multiple independent processes.

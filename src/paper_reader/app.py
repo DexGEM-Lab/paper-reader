@@ -2141,6 +2141,9 @@ def create_app(
     app.config["FEISHU_OAUTH"] = feishu_oauth
     app.config["AUTH_MODE"] = runtime_config.auth_mode
     app.config["FEISHU_ALLOWED_CHAT_ID"] = runtime_config.feishu_allowed_chat_id
+    app.config.update(FEISHU_EVENT_TOKEN=runtime_config.feishu_event_token, FEISHU_ENCRYPT_KEY=runtime_config.feishu_encrypt_key, FEISHU_MONITOR_CHAT_IDS=runtime_config.feishu_monitor_chat_ids)
+    from .feishu_events import blueprint as feishu_events_blueprint
+    app.register_blueprint(feishu_events_blueprint)
     app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(hours=runtime_config.session_ttl_hours)
     app.config["SESSION_COOKIE_SECURE"] = runtime_config.session_cookie_secure
     app.config["CSRF_PROTECTION_ENABLED"] = True
@@ -2370,7 +2373,7 @@ def create_app(
     @app.before_request
     def require_login() -> Any:
         endpoint = request.endpoint or ""
-        allowed = {"login", "register", "logout", "health", "feishu_login", "feishu_callback"}
+        allowed = {"login", "register", "logout", "health", "feishu_login", "feishu_callback", "feishu_events.webhook"}
         if endpoint == "register" and app.config["AUTH_MODE"] == "feishu":
             abort(404)
         if endpoint in allowed or endpoint.startswith("static"):
@@ -2382,7 +2385,7 @@ def create_app(
 
     @app.before_request
     def protect_mutating_requests() -> Any:
-        if request.method not in {"POST", "PUT", "DELETE"} or request.endpoint == "feishu_callback":
+        if request.method not in {"POST", "PUT", "DELETE"} or request.endpoint in {"feishu_callback", "feishu_events.webhook"}:
             return None
         if request.endpoint == "login" and app.config["AUTH_MODE"] == "feishu":
             abort(404)
@@ -2962,6 +2965,7 @@ def create_app(
                 source_context=str(entry.get("context_text") or "").strip() or None,
                 sender_open_id=str(entry.get("sender_open_id") or "").strip() or None,
                 message_time_iso=str(entry.get("msg_time_iso") or "").strip() or None,
+                message_id=str(entry.get("message_id") or "").strip() or None,
                 imported_by_user_id=action.requested_by_user_id,
             )
 
@@ -3082,7 +3086,7 @@ def create_app(
                             title=snapshot.title,
                             url=resolved["canonical_url"],
                             kind=resolved["resource_kind"],
-                            provenance=[],
+                            provenance=action.payload.get("provenance") or [],
                             content=sample,
                             fetch_status=snapshot.fetch_status,
                         )
