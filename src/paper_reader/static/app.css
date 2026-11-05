@@ -954,6 +954,33 @@ label span {
   padding: 0;
 }
 
+/* Drawer overflow guards: grid/flex children must not size to min-content,
+   and long unbreakable strings (URLs, tokens) wrap instead of clipping. */
+.assistant-pane,
+.assistant-card,
+.team-chat-card,
+.team-chat-layout,
+.team-chat-thread,
+.activity-section {
+  min-width: 0;
+}
+
+.assistant-card > *,
+.team-chat-layout > *,
+.activity-section > *,
+.team-chat-message,
+.team-comment-item,
+.activity-item-card {
+  min-width: 0;
+}
+
+.team-chat-body,
+.team-comment-item p,
+.activity-item-card p,
+.activity-comment-card p {
+  overflow-wrap: anywhere;
+}
+
 .team-chat-thread {
   padding: 0 16px;
 }
