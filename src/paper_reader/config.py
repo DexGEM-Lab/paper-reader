@@ -154,6 +154,10 @@ class PaperReaderConfig:
     screen_imports: bool
     discovery_enabled: bool
     discovery_hour: int
+    agent_chat_enabled: bool
+    pi_bin: str
+    pi_home: Path
+    pi_timeout: float
 
     @property
     def feishu_enabled(self) -> bool:
@@ -275,5 +279,15 @@ def load_config(
         discovery_hour=_hour_setting(
             setting("PAPER_READER_DISCOVERY_HOUR", "7"),
             name="PAPER_READER_DISCOVERY_HOUR",
+        ),
+        agent_chat_enabled=_bool_setting(
+            setting("PAPER_READER_AGENT_CHAT_ENABLED", "false"),
+            name="PAPER_READER_AGENT_CHAT_ENABLED",
+        ),
+        pi_bin=setting("PAPER_READER_PI_BIN", "pi"),
+        pi_home=_path_setting(setting("PAPER_READER_PI_HOME", "/opt/paper-reader/pi-home"), cwd=cwd),
+        pi_timeout=_positive_float_setting(
+            setting("PAPER_READER_PI_TIMEOUT", "300"),
+            name="PAPER_READER_PI_TIMEOUT",
         ),
     )

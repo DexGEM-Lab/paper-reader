@@ -1,0 +1,5 @@
+{"type":"session","id":"session-1","cwd":"/tmp/paper"}
+{"type":"message","message":{"role":"user","content":[{"type":"text","text":"请总结"}]}}
+{"type":"message","message":{"role":"assistant","content":[{"type":"thinking","thinking":"internal"},{"type":"text","text":"我先核对论文中的实验表格。"},{"type":"toolCall","id":"call-1","name":"read","arguments":{"path":"paper.pdf"}}],"stopReason":"toolUse"}}
+{"type":"message","message":{"role":"toolResult","toolCallId":"call-1","content":[{"type":"text","text":"RAW TOOL DUMP MUST STAY PRIVATE"}]}}
+{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"核心结论是方法显著提升了成功率。\n\n来源定位：`materials/source/01-paper.pdf`，第 4 节。"}],"stopReason":"stop"}}

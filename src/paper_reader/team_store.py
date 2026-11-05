@@ -2021,6 +2021,44 @@ class TeamStore:
             "private": {"messages": private_messages, "count": private_count, "visibility": "private"},
         }
 
+    def agent_paper_metadata(self, rel_path: str) -> dict[str, Any] | None:
+        """Return stable identity and provenance needed by a Pi paper session."""
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id, rel_path, title, display_title, canonical_url
+                FROM papers
+                WHERE rel_path = ?
+                """,
+                (rel_path,),
+            ).fetchone()
+            if row is None:
+                return None
+            sources = [
+                {
+                    "source_type": str(source["source_type"]),
+                    "source_value": str(source["source_value"]),
+                    "source_url": str(source["source_url"]) if source["source_url"] else None,
+                }
+                for source in conn.execute(
+                    """
+                    SELECT source_type, source_value, source_url
+                    FROM paper_sources
+                    WHERE paper_id = ?
+                    ORDER BY created_at DESC, id DESC
+                    """,
+                    (int(row["id"]),),
+                ).fetchall()
+            ]
+        return {
+            "id": int(row["id"]),
+            "rel_path": str(row["rel_path"]),
+            "title": str(row["title"]),
+            "display_title": str(row["display_title"]),
+            "canonical_url": str(row["canonical_url"]) if row["canonical_url"] else None,
+            "sources": sources,
+        }
+
     def paper_context(self, rel_path: str, current_user_id: int | None = None) -> dict[str, Any]:
         with self._connect() as conn:
             paper_row = conn.execute(
