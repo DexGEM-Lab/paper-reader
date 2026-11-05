@@ -111,11 +111,11 @@ PAPER_READER_LLM_CONTEXT_TOKENS=12000
 ```dotenv
 PAPER_READER_AGENT_CHAT_ENABLED=false
 PAPER_READER_PI_BIN=pi
-PAPER_READER_PI_HOME=/opt/paper-reader/pi-home
+PAPER_READER_PI_DIR=/opt/paper-reader/pi-home
 PAPER_READER_PI_TIMEOUT=300
 ```
 
-启用后，我爱学按用户与论文隔离会话，一起学按论文共享会话。状态写入 `<data>/agent-sessions/`；每轮刷新本地论文、网页快照、附件和已有解读材料，并从 Pi session JSONL 投影出简洁的工具状态、过程叙述和最终回答。聊天正文仍写入现有 SQLite `chat_messages` 表。每个会话同一时间只执行一轮，重叠请求返回 HTTP 409。
+启用后，我爱学按用户与论文隔离会话，一起学按论文共享会话。应用把 `PAPER_READER_PI_DIR` 作为子进程的 `PI_CODING_AGENT_DIR`。状态写入 `<data>/agent-sessions/`；每轮刷新本地论文、网页快照、附件和已有解读材料，并从 Pi session JSONL 投影出简洁的工具状态、过程叙述和最终回答。聊天正文仍写入现有 SQLite `chat_messages` 表。每个会话同一时间只执行一轮，重叠请求返回 HTTP 409。session 中出现 `stopReason=error` / `errorMessage` 时即判定失败，即使 Pi 进程退出码为 0。
 
 ### 批量导入飞书历史链接
 

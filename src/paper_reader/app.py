@@ -2157,7 +2157,7 @@ def create_app(
     app.config["LLM_TIMEOUT"] = runtime_config.llm_timeout
     app.config["AGENT_CHAT_ENABLED"] = runtime_config.agent_chat_enabled
     app.config["PI_BIN"] = runtime_config.pi_bin
-    app.config["PI_HOME"] = runtime_config.pi_home
+    app.config["PI_CODING_AGENT_DIR"] = runtime_config.pi_dir
     app.config["PI_TIMEOUT"] = runtime_config.pi_timeout
     app.config["SCREEN_IMPORTS"] = runtime_config.screen_imports
     app.config["DISCOVERY_ENABLED"] = runtime_config.discovery_enabled
@@ -3676,7 +3676,7 @@ def create_app(
         PiAgentChat(
             data_dir=runtime_config.data_dir,
             pi_bin=runtime_config.pi_bin,
-            pi_home=runtime_config.pi_home,
+            pi_dir=runtime_config.pi_dir,
             timeout_seconds=runtime_config.pi_timeout,
             library=app.library,
             prompt_store=app.prompt_store,

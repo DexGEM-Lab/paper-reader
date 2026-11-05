@@ -148,7 +148,7 @@ class PiAgentChat:
         *,
         data_dir: Path,
         pi_bin: str,
-        pi_home: Path,
+        pi_dir: Path,
         timeout_seconds: float,
         library: Any,
         prompt_store: Any,
@@ -159,7 +159,7 @@ class PiAgentChat:
         self.sessions_root = Path(data_dir).resolve() / "agent-sessions"
         self.sessions_root.mkdir(parents=True, exist_ok=True)
         self.pi_bin = pi_bin
-        self.pi_home = Path(pi_home).resolve()
+        self.pi_dir = Path(pi_dir).resolve()
         self.timeout_seconds = float(timeout_seconds)
         self.library = library
         self.prompt_store = prompt_store
@@ -365,8 +365,7 @@ class PiAgentChat:
         command.extend(["-p", prompt])
 
         env = os.environ.copy()
-        env["PI_HOME"] = str(self.pi_home)
-        env["PI_CODING_AGENT_DIR"] = str(self.pi_home)
+        env["PI_CODING_AGENT_DIR"] = str(self.pi_dir)
         stderr_path = session_root / "last-stderr.log"
         started = time.monotonic()
         with stderr_path.open("wb") as stderr_handle:
@@ -383,6 +382,7 @@ class PiAgentChat:
                 raise RuntimeError("Pi agent 未安装或 PAPER_READER_PI_BIN 配置错误。") from exc
 
             final_text = ""
+            error_text = ""
             while True:
                 if log_path is None:
                     files = self._session_files(sessions_dir)
@@ -393,18 +393,26 @@ class PiAgentChat:
                     rows, offset = self._read_complete_rows(log_path, offset)
                     for row in rows:
                         for event in extract_pi_chat_events(row):
+                            if event.kind == "error":
+                                error_text = event.text
+                                continue
                             emit(event)
                             if event.final:
                                 final_text = event.text
+                                error_text = ""
                 return_code = process.poll()
                 if return_code is not None:
                     if log_path is not None:
                         rows, offset = self._read_complete_rows(log_path, offset)
                         for row in rows:
                             for event in extract_pi_chat_events(row):
+                                if event.kind == "error":
+                                    error_text = event.text
+                                    continue
                                 emit(event)
                                 if event.final:
                                     final_text = event.text
+                                    error_text = ""
                     break
                 if time.monotonic() - started >= self.timeout_seconds:
                     process.kill()
@@ -412,6 +420,9 @@ class PiAgentChat:
                     raise RuntimeError(f"Pi agent 超过 {int(self.timeout_seconds)} 秒未完成，已停止本轮任务。")
                 time.sleep(self.poll_interval)
 
+        if error_text:
+            emit(AgentChatEvent(kind="error", text=error_text))
+            raise RuntimeError(error_text)
         if return_code != 0:
             stderr_text = stderr_path.read_text(encoding="utf-8", errors="replace").strip()
             detail = stderr_text[-800:] if stderr_text else f"退出码 {return_code}"

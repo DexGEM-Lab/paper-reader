@@ -156,7 +156,7 @@ class PaperReaderConfig:
     discovery_hour: int
     agent_chat_enabled: bool
     pi_bin: str
-    pi_home: Path
+    pi_dir: Path
     pi_timeout: float
 
     @property
@@ -285,7 +285,7 @@ def load_config(
             name="PAPER_READER_AGENT_CHAT_ENABLED",
         ),
         pi_bin=setting("PAPER_READER_PI_BIN", "pi"),
-        pi_home=_path_setting(setting("PAPER_READER_PI_HOME", "/opt/paper-reader/pi-home"), cwd=cwd),
+        pi_dir=_path_setting(setting("PAPER_READER_PI_DIR", "/opt/paper-reader/pi-home"), cwd=cwd),
         pi_timeout=_positive_float_setting(
             setting("PAPER_READER_PI_TIMEOUT", "300"),
             name="PAPER_READER_PI_TIMEOUT",

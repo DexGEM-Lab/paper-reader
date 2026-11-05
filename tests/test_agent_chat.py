@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from src.paper_reader.agent_chat import (
     PiAgentChat,
     agent_session_key,
@@ -24,7 +26,7 @@ def test_agent_chat_config_defaults_and_overrides(tmp_path: Path) -> None:
     defaults = load_config(project_dir=tmp_path, cwd=tmp_path, environ={})
     assert defaults.agent_chat_enabled is False
     assert defaults.pi_bin == "pi"
-    assert defaults.pi_home == Path("/opt/paper-reader/pi-home")
+    assert defaults.pi_dir == Path("/opt/paper-reader/pi-home")
     assert defaults.pi_timeout == 300
 
     configured = load_config(
@@ -33,13 +35,13 @@ def test_agent_chat_config_defaults_and_overrides(tmp_path: Path) -> None:
         environ={
             "PAPER_READER_AGENT_CHAT_ENABLED": "true",
             "PAPER_READER_PI_BIN": "/opt/pi/bin/pi",
-            "PAPER_READER_PI_HOME": "runtime/pi-home",
+            "PAPER_READER_PI_DIR": "runtime/pi-home",
             "PAPER_READER_PI_TIMEOUT": "45",
         },
     )
     assert configured.agent_chat_enabled is True
     assert configured.pi_bin == "/opt/pi/bin/pi"
-    assert configured.pi_home == (tmp_path / "runtime/pi-home").resolve()
+    assert configured.pi_dir == (tmp_path / "runtime/pi-home").resolve()
     assert configured.pi_timeout == 45
 
 
@@ -143,7 +145,7 @@ def test_material_package_and_agents_prompt_refresh(tmp_path: Path) -> None:
     backend = PiAgentChat(
         data_dir=tmp_path / "data",
         pi_bin="pi",
-        pi_home=tmp_path / "pi-home",
+        pi_dir=tmp_path / "pi-home",
         timeout_seconds=5,
         library=FakeLibrary(source, result),
         prompt_store=FakePromptStore(),
@@ -189,7 +191,7 @@ def test_mock_pi_subprocess_streams_fixture_and_uses_configured_interface(tmp_pa
     backend = PiAgentChat(
         data_dir=tmp_path / "data",
         pi_bin="/mock/bin/pi",
-        pi_home=tmp_path / "pi-home",
+        pi_dir=tmp_path / "pi-home",
         timeout_seconds=5,
         library=FakeLibrary(source),
         prompt_store=FakePromptStore(),
@@ -216,8 +218,69 @@ def test_mock_pi_subprocess_streams_fixture_and_uses_configured_interface(tmp_pa
     assert "--session-dir" in command
     assert command[-2:] == ["-p", "[团队成员：Alice]\n请总结"]
     assert kwargs["cwd"].endswith("/cwd")
-    assert kwargs["env"]["PI_HOME"] == str((tmp_path / "pi-home").resolve())
+    assert kwargs["env"]["PI_CODING_AGENT_DIR"] == str((tmp_path / "pi-home").resolve())
     assert answer.startswith("核心结论")
     assert [event.kind for event in events] == ["status", "narration", "final"]
     assert backend.try_reserve(key) is True
     backend.release(key)
+
+
+def test_pi_log_model_error_fails_even_when_process_exits_zero(tmp_path: Path) -> None:
+    library_root = tmp_path / "library"
+    library_root.mkdir()
+    source = library_root / "paper.pdf"
+    source.write_bytes(b"pdf")
+
+    def fake_popen(command, **kwargs):
+        sessions_dir = Path(command[command.index("--session-dir") + 1])
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        (sessions_dir / "session-error.jsonl").write_text(
+            "\n".join(
+                [
+                    json.dumps({"type": "session", "id": "session-error"}),
+                    json.dumps(
+                        {
+                            "type": "message",
+                            "message": {
+                                "role": "assistant",
+                                "content": [],
+                                "stopReason": "error",
+                                "errorMessage": "configured model is unavailable",
+                            },
+                        }
+                    ),
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return CompletedProcess()
+
+    backend = PiAgentChat(
+        data_dir=tmp_path / "data",
+        pi_bin="pi",
+        pi_dir=tmp_path / "pi-home",
+        timeout_seconds=5,
+        library=FakeLibrary(source),
+        prompt_store=FakePromptStore(),
+        team_store=FakeTeamStore(library_root),
+        popen_factory=fake_popen,
+        poll_interval=0,
+    )
+    key = backend.session_key_for("paper.pdf", visibility="private", user_id=7)
+    assert backend.try_reserve(key)
+    events = []
+    with pytest.raises(RuntimeError, match="configured model is unavailable"):
+        backend.run_turn(
+            rel_path="paper.pdf",
+            visibility="private",
+            user_id=7,
+            display_name="Alice",
+            question="请总结",
+            session_key=key,
+            on_event=events.append,
+            reserved=True,
+        )
+    assert [(event.kind, event.text) for event in events] == [
+        ("error", "configured model is unavailable")
+    ]
