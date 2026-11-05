@@ -1530,8 +1530,24 @@ dialog::backdrop,
 
 .insights-phase-strip {
   border-radius: 0;
-  background: var(--ink);
-  color: var(--paper);
+  background: transparent;
+  color: var(--ink);
+}
+
+/* Quiet columns: paper cards with hairline separators; sapphire marks the current phase. */
+.insights-phase-card {
+  background: var(--paper);
+  border: var(--border-quiet);
+  border-left: 2px solid var(--hairline);
+}
+
+.insights-phase-card.is-current {
+  background: var(--sapphire-wash);
+  border-left-color: var(--sapphire);
+}
+
+.insights-phase-card.is-current .insights-phase-label {
+  color: var(--sapphire);
 }
 
 .insights-phase-label {

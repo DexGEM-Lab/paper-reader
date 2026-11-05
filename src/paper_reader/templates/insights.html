@@ -134,7 +134,7 @@
               </div>
               <div class="insights-phase-strip">
                 {% for phase in theme.phase_cards %}
-                  <article class="insights-phase-card">
+                  <article class="insights-phase-card {% if loop.last %}is-current{% endif %}">
                     <p class="insights-phase-label">{{ phase.phase }}</p>
                     <h5>{{ phase.label }}</h5>
                     <p>{{ phase.summary }}</p>
