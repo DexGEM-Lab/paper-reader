@@ -294,6 +294,8 @@ class RichContentTests(unittest.TestCase):
             fetched_urls.append(url)
             if url == page_url:
                 return fetched(page, url=url)
+            if url.endswith("/tiny-decoration.png"):
+                return fetched(b"tiny", url=url, content_type="image/png")
             return fetched(b"x" * (41 * 1024), url=url, content_type="image/jpeg" if url.endswith(".jpg") else "image/png")
 
         with tempfile.TemporaryDirectory() as tempdir:
@@ -320,9 +322,13 @@ class RichContentTests(unittest.TestCase):
         self.assertNotIn("<sup>", markdown)
         self.assertNotIn("&amp;", markdown)
         self.assertNotIn("## Media", markdown)
+        self.assertNotRegex(markdown, r"</?[A-Za-z][A-Za-z0-9-]*(?:\s[^>]*)?>")
         self.assertNotIn("University Logo", markdown)
         self.assertNotIn("Lab Logo", markdown)
         self.assertNotIn("Privacy", markdown)
+        self.assertIn("https://project.example.org/media/tiny-decoration.png", fetched_urls)
+        self.assertNotIn("Decorative project image", markdown)
+        self.assertFalse(any("navigation-banner" in url for url in fetched_urls))
         self.assertFalse(any("university-logo" in url or "lab-brand" in url or "twitter-card" in url or "twitter-icon" in url for url in fetched_urls))
 
     def test_blog_fixture_keeps_images_between_their_paragraphs(self) -> None:
