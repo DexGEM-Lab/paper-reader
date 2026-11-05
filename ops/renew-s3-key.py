@@ -37,7 +37,10 @@ def lark(method, path, params=None, data=None):
     return json.loads(out.stdout)
 
 def main():
-    before = int(time.time() * 1000)
+    # Workstation clock is ~75s AHEAD of Feishu server time; delivery messages
+    # carry server timestamps, so compare with a generous skew allowance and
+    # require the paper-reader scope marker instead of a tight cutoff.
+    before = int(time.time() * 1000) - 300_000
     text = (f'<at user_id="{BOT_OPEN_ID}"></at> oss-key /runtime/paper-reader/backups '
             "168h paper-reader 每日快照备份自动续期 (reader.dex-gem.ai)")
     r = lark("POST", "/open-apis/im/v1/messages", {"receive_id_type": "chat_id"},
@@ -56,7 +59,7 @@ def main():
             if int(m["create_time"]) <= before or m["msg_type"] != "text":
                 continue
             body = json.loads(m["body"]["content"])["text"]
-            if "Access Key" not in body:
+            if "Access Key" not in body or "paper-reader" not in body:
                 continue
             ak = re.search(r"Access Key:\s*(\S+)", body).group(1)
             sk = re.search(r"Secret Key:\s*(\S+)", body).group(1)
