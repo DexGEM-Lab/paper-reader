@@ -884,6 +884,12 @@ label span {
   border: var(--border-quiet);
   border-radius: 0;
   padding: 16px;
+  color: var(--ink);
+}
+
+.markdown-viewer .code-block pre {
+  background: transparent;
+  border: 0;
 }
 
 .markdown-viewer pre code {
@@ -894,8 +900,9 @@ label span {
 .markdown-viewer blockquote {
   margin-left: 0;
   padding-left: 16px;
-  border-left: 2px solid var(--ink);
+  border-left: 2px solid var(--hairline);
   color: var(--ink-60);
+  background: transparent;
 }
 
 .markdown-viewer img {

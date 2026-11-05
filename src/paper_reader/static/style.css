@@ -1205,11 +1205,14 @@ main {
   color: var(--ink);
 }
 .markdown-render blockquote {
-  padding: 0.75em 1em;
-  border-left: 3px solid var(--brand);
+  padding: 0.25em 0 0.25em 1em;
+  border-left: 2px solid var(--line);
   color: var(--muted);
-  background: var(--paper);
-  border-radius: 0 16px 16px 0;
+  background: transparent;
+  border-radius: 0;
+}
+.markdown-render blockquote.key-conclusion {
+  border-left-color: var(--brand);
 }
 .markdown-render code {
   padding: 0.12em 0.42em;
@@ -1221,20 +1224,20 @@ main {
 }
 .markdown-render .code-block {
   margin: 0 0 1em;
-  border: 1px solid var(--ink);
+  border: 1px solid var(--line);
   border-radius: var(--radius);
   overflow: hidden;
-  background: var(--ink);
+  background: var(--wash);
   box-shadow: none;
 }
 .markdown-render .code-block-head {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  min-height: 38px;
-  padding: 0 14px;
-  border-bottom: 1px solid rgba(174, 180, 193, 0.14);
-  background: rgba(32, 40, 70, 0.94);
+  min-height: 30px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
 }
 .markdown-render .code-block-language {
   display: inline-flex;
@@ -1243,7 +1246,7 @@ main {
   padding: 0.18rem 0.5rem;
   border-radius: var(--radius);
   background: transparent;
-  color: var(--cyan-on-ink);
+  color: var(--ink-60);
   font-size: 0.68rem;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -1254,7 +1257,7 @@ main {
   padding: 16px 18px;
   overflow: auto;
   background: transparent;
-  color: var(--paper);
+  color: var(--ink);
   line-height: 1.6;
 }
 .markdown-render pre code {
