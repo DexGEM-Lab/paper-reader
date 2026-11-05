@@ -152,7 +152,7 @@
         {% set tag_key = tag.slug or tag.name|lower %}
         {% if tag_key not in tag_groups.seen %}
           {% set _ = tag_groups.seen.append(tag_key) %}
-          {% if tag_groups.summary|length < 6 %}
+          {% if tag_groups.summary|length < 4 %}
             {% set _ = tag_groups.summary.append(tag) %}
           {% else %}
             {% set _ = tag_groups.overflow.append(tag) %}
@@ -170,21 +170,23 @@
       <header class="item-header">
         <p class="eyebrow">{{ format_resource_kind(selected_paper.resource_kind) }} · {{ '原文阅读' if selected_tab == 'source' else (selected_prompt.name if selected_prompt else '解读') }}</p>
         <h2 class="item-title">{{ selected_paper.display_title }}</h2>
-        <p class="item-meta">
-          {{ selected_paper.source_domain or selected_paper.file_name }}
-          {% if selected_paper.extracted_date %} · {{ selected_paper.extracted_date }}{% endif %}
-          · {{ format_bytes(selected_paper.file_size) }}
-        </p>
-        {% if summary_tags %}
-          <div class="item-tags">
-            {% for tag in summary_tags %}
-              <span class="item-tag-chip">#{{ tag.name }}</span>
-            {% endfor %}
-            {% if overflow_tags %}
-              <span class="item-tag-more">+{{ overflow_tags|length }}</span>
-            {% endif %}
-          </div>
-        {% endif %}
+        <div class="item-subrow">
+          <p class="item-meta">
+            {{ selected_paper.source_domain or selected_paper.file_name }}
+            {% if selected_paper.extracted_date %} · {{ selected_paper.extracted_date }}{% endif %}
+            · {{ format_bytes(selected_paper.file_size) }}
+          </p>
+          {% if summary_tags %}
+            <div class="item-tags">
+              {% for tag in summary_tags %}
+                <span class="item-tag-chip">#{{ tag.name }}</span>
+              {% endfor %}
+              {% if overflow_tags %}
+                <span class="item-tag-more">+{{ overflow_tags|length }}</span>
+              {% endif %}
+            </div>
+          {% endif %}
+        </div>
         <div class="item-actions">
           {% if selected_paper.source_url %}
             <a class="button-link secondary item-action" href="{{ selected_paper.source_url }}" target="_blank" rel="noreferrer">Open original</a>
@@ -791,6 +793,18 @@
     {% endif %}
   </aside>
 </section>
+
+<script>
+  (() => {
+    const header = document.querySelector(".item-header");
+    const stage = document.querySelector("[data-center-stage]");
+    if (!header || !stage) return;
+    const sync = (el) => header.classList.toggle("is-condensed", el.scrollTop > 72);
+    stage.querySelectorAll(".markdown-viewer, .source-viewer-body").forEach((el) => {
+      el.addEventListener("scroll", () => sync(el), { passive: true });
+    });
+  })();
+</script>
 
 <nav class="mobile-tab-bar" aria-label="移动端主导航">
   <button type="button" class="mobile-tab-button" data-mobile-tab="library" aria-pressed="false">书库</button>

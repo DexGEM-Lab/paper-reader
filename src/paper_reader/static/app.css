@@ -2056,10 +2056,10 @@ table {
 }
 
 .item-header {
-  padding: 16px 24px 0;
+  padding: 10px 20px 0;
   border-bottom: var(--border-quiet);
   display: grid;
-  gap: 8px;
+  gap: 5px;
 }
 
 .item-header .eyebrow {
@@ -2069,12 +2069,25 @@ table {
 .item-title {
   margin: 0;
   font-family: var(--font-display);
-  font-size: clamp(20px, 1.6vw, 26px);
+  font-size: clamp(18px, 1.4vw, 22px);
   font-weight: 700;
   line-height: 1.2;
   letter-spacing: -0.015em;
   color: var(--ink);
   overflow-wrap: anywhere;
+}
+
+/* Meta line and tag chips share one row. */
+.item-subrow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  min-width: 0;
+}
+
+.item-subrow .item-meta {
+  margin: 0;
 }
 
 .item-meta {
@@ -2112,8 +2125,8 @@ table {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
-  padding: 4px 0 0;
+  gap: 6px;
+  padding: 2px 0 0;
 }
 
 .item-actions .inline-form {
@@ -2122,10 +2135,17 @@ table {
 }
 
 .item-action {
-  min-height: 34px;
-  padding: 5px 12px;
+  min-height: 32px;
+  padding: 4px 10px;
   font-size: var(--text-label);
   white-space: nowrap;
+}
+
+.item-actions .icon-button.item-action-icon {
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 4px;
 }
 
 .item-action.is-accent {
@@ -2146,14 +2166,14 @@ table {
   display: flex;
   flex-wrap: wrap;
   gap: 0;
-  margin-top: 4px;
+  margin-top: 2px;
 }
 
 .item-header .viewer-tab {
   display: inline-flex;
   align-items: baseline;
   gap: 6px;
-  padding: 8px 12px;
+  padding: 5px 10px;
   border: 0;
   border-bottom: 2px solid transparent;
   border-radius: 0;
@@ -2184,6 +2204,33 @@ table {
   color: var(--ink-30);
 }
 
+/* Slim collapsed state while the reader scrolls: title + key actions only. */
+.item-header.is-condensed {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  row-gap: 2px;
+}
+
+.item-header.is-condensed .eyebrow,
+.item-header.is-condensed .item-subrow {
+  display: none;
+}
+
+.item-header.is-condensed .item-title {
+  font-size: var(--text-ui);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.item-header.is-condensed .viewer-tabs-inline {
+  grid-column: 1 / -1;
+}
+
+.item-header.is-condensed + .item-details {
+  display: none;
+}
+
 /* ---------------------------------------------------------- 详情 disclosure */
 
 .item-details {
@@ -2196,7 +2243,7 @@ table {
   align-items: baseline;
   gap: 12px;
   flex-wrap: wrap;
-  padding: 8px 0;
+  padding: 6px 0;
   cursor: pointer;
   list-style: none;
   font-size: var(--text-label);
