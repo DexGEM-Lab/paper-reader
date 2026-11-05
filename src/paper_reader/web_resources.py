@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Protocol
 from urllib.parse import parse_qsl, quote, urlencode, urljoin, urlsplit, urlunsplit
 
+from lxml import html as lxml_html
 from trafilatura import extract, extract_metadata
 
 from .arxiv_markdown import base_arxiv_id, normalize_arxiv_id
@@ -27,6 +28,9 @@ WEB_ROOT_NAME = "Web"
 WEB_METADATA_SUFFIX = ".json"
 MAX_ASSETS_PER_ITEM = 20
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
+MIN_INLINE_IMAGE_BYTES = 40 * 1024
+MIN_INLINE_IMAGE_WIDTH = 200
+READER_MODE_VERSION = 2
 MAX_ATTACHMENTS_PER_ITEM = 3
 MAX_ATTACHMENT_CANDIDATES = 60
 MAX_SECOND_HOP_PAGES = 5
@@ -72,6 +76,18 @@ _NEWS_DOMAINS = frozenset(
 )
 _PROJECT_DOMAINS = frozenset({"github.com", "gitlab.com", "huggingface.co", "replicate.com"})
 _PROJECT_PATH_RE = re.compile(r"(?:^|[-_/])(project|projects|demo|demos|showcase|repository|repo)(?:[-_/]|$)", re.IGNORECASE)
+_MEDIA_JUNK_RE = re.compile(
+    r"(?:^|[-_/.:\\s])(logo|icon|avatar|badge|sprite|emoji|favicon|social|share-button|twitter-card)(?:[-_/.:\\s]|$)",
+    re.IGNORECASE,
+)
+_MEDIA_CONTAINER_JUNK_RE = re.compile(
+    r"(?:^|[-_\\s])(logo|navbar|navigation|masthead|site-header|site-footer|social|share-buttons|author-avatar)(?:[-_\\s]|$)",
+    re.IGNORECASE,
+)
+_NAV_BANNER_RE = re.compile(r"(?:^|[-_/.:\\s])(banner|navbar|navigation|masthead|header|promo)(?:[-_/.:\\s]|$)", re.IGNORECASE)
+_MARKDOWN_IMAGE_RE = re.compile(r"!\[([^\]\n]*)\]\((\S+?)(?:\s+[\"'][^\"']*[\"'])?\)")
+_RAW_HTML_TAG_RE = re.compile(r"</?[A-Za-z][^>]*>|<!--.*?-->", re.DOTALL)
+_VIDEO_PLACEHOLDER_PREFIX = "https://paper-reader.invalid/video/"
 
 
 class WebExtractionError(RuntimeError):
@@ -300,8 +316,87 @@ def _fallback_extract(html_text: str) -> tuple[str, str]:
     return title, html.unescape(text).strip()
 
 
+def _unescape_fully(value: str) -> str:
+    previous = value
+    for _ in range(3):
+        current = html.unescape(previous)
+        if current == previous:
+            break
+        previous = current
+    return previous
+
+
+def _plain_text(value: object) -> str:
+    text = _unescape_fully(str(value or ""))
+    text = _RAW_HTML_TAG_RE.sub("", text)
+    return " ".join(text.split())
+
+
 def _clean_label(value: object, *, limit: int = 240) -> str:
-    return " ".join(html.unescape(str(value or "")).split())[:limit]
+    return _plain_text(value)[:limit]
+
+
+def _sanitize_extracted_markdown(value: str) -> str:
+    text = _unescape_fully(value).replace("\u00a0", " ")
+    text = _RAW_HTML_TAG_RE.sub("", text)
+    lines: list[str] = []
+    previous_plain = ""
+    for raw_line in text.splitlines():
+        line = re.sub(r"[ \t]+", " ", raw_line).strip()
+        plain = re.sub(r"^[#>*+\-\d.()\s]+", "", line).casefold()
+        if plain in {"skip to content", "open menu", "close menu", "share this", "back to top"}:
+            continue
+        if line and plain == previous_plain:
+            continue
+        lines.append(line)
+        if plain:
+            previous_plain = plain
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+
+
+def _video_placeholder_url(url: str) -> str:
+    digest = hashlib.sha256(url.encode("utf-8")).hexdigest()[:20]
+    return f"{_VIDEO_PLACEHOLDER_PREFIX}{digest}"
+
+
+def _video_details(tag: str, values: dict[str, str], element: Any, *, base_url: str) -> tuple[str, str] | None:
+    if tag == "video":
+        raw_url = values.get("src", "")
+        if not raw_url:
+            for source in element.iterdescendants(tag="source"):
+                raw_url = str(source.get("src") or "")
+                if raw_url:
+                    break
+        url = _public_absolute_url(base_url, raw_url)
+        return (url, _clean_label(values.get("title")) or "HTML5 video") if url else None
+    if tag != "iframe":
+        return None
+    url = _public_absolute_url(base_url, values.get("src", ""))
+    if not url:
+        return None
+    host = (urlsplit(url).hostname or "").casefold()
+    if not any(_host_matches(host, known) for known in ("youtube.com", "youtu.be", "bilibili.com")):
+        return None
+    return url, _clean_label(values.get("title")) or "Embedded video"
+
+
+def _html_with_video_placeholders(html_text: str, *, base_url: str) -> str:
+    try:
+        document = lxml_html.fromstring(html_text)
+    except (ValueError, TypeError):
+        return html_text
+    for element in list(document.iter("video", "iframe")):
+        tag = str(element.tag).casefold()
+        values = {str(key).casefold(): str(value or "") for key, value in element.attrib.items()}
+        details = _video_details(tag, values, element, base_url=base_url)
+        if not details:
+            continue
+        url, title = details
+        placeholder = lxml_html.Element("img")
+        placeholder.set("src", _video_placeholder_url(url))
+        placeholder.set("alt", title)
+        element.addprevious(placeholder)
+    return lxml_html.tostring(document, encoding="unicode", method="html")
 
 
 def _srcset_url(value: str) -> str:
@@ -352,6 +447,8 @@ def _youtube_thumbnail(embed_url: str) -> str | None:
 
 
 class _RichContentParser(HTMLParser):
+    _VOID_TAGS = frozenset({"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"})
+
     def __init__(self, base_url: str) -> None:
         super().__init__(convert_charrefs=True)
         self.base_url = base_url
@@ -359,46 +456,67 @@ class _RichContentParser(HTMLParser):
         self.images: list[dict[str, str]] = []
         self.videos: list[dict[str, str]] = []
         self.links: list[dict[str, str]] = []
+        self._stack: list[tuple[str, bool]] = []
         self._anchor: dict[str, Any] | None = None
         self._video: dict[str, Any] | None = None
+
+    def _blocked(self) -> bool:
+        return bool(self._stack and self._stack[-1][1])
 
     def handle_starttag(self, tag: str, attrs) -> None:  # noqa: ANN001
         values = {str(key).casefold(): str(value or "") for key, value in attrs}
         tag = tag.casefold()
         if tag == "meta":
             key = (values.get("property") or values.get("name") or "").casefold()
-            if key in {"og:image", "og:image:url", "twitter:image", "twitter:image:src"}:
+            if key in {"og:image", "og:image:url"}:
                 url = _public_absolute_url(self.base_url, values.get("content", ""))
                 if url:
-                    self.meta_images.append({"url": url, "alt": "Hero image", "role": "hero"})
+                    self.meta_images.append({"url": url, "alt": "Hero image", "role": "hero", "marker": "og:image"})
             return
+
+        marker = " ".join((values.get("class", ""), values.get("id", ""), values.get("role", ""))).casefold()
+        blocked = self._blocked() or tag in {"header", "nav", "footer"} or bool(_MEDIA_CONTAINER_JUNK_RE.search(marker))
+        if tag not in self._VOID_TAGS:
+            self._stack.append((tag, blocked))
+
         if tag == "img":
             raw_src = values.get("data-src") or values.get("data-original") or values.get("src") or _srcset_url(values.get("srcset", ""))
             url = _public_absolute_url(self.base_url, raw_src)
-            if not url:
+            image_marker = " ".join((marker, values.get("alt", ""), url or "")).casefold()
+            if blocked or not url or _MEDIA_JUNK_RE.search(image_marker):
                 return
-            try:
-                width = int(re.sub(r"\D.*$", "", values.get("width", "")) or 0)
-                height = int(re.sub(r"\D.*$", "", values.get("height", "")) or 0)
-            except ValueError:
-                width = height = 0
-            marker = " ".join((values.get("class", ""), values.get("id", ""), values.get("alt", ""))).casefold()
-            if any(word in marker for word in ("avatar", "icon", "logo", "emoji", "badge", "spinner")):
+            width = int(match.group(1)) if (match := re.match(r"\s*(\d+)", values.get("width", ""))) else 0
+            height = int(match.group(1)) if (match := re.match(r"\s*(\d+)", values.get("height", ""))) else 0
+            if width and width < MIN_INLINE_IMAGE_WIDTH:
                 return
-            if width and height and (width < 160 or height < 100 or width * height < 40_000):
+            if width and height and width / max(height, 1) > 4 and _NAV_BANNER_RE.search(image_marker):
                 return
-            self.images.append({"url": url, "alt": _clean_label(values.get("alt")) or "Inline image", "role": "inline"})
+            self.images.append(
+                {
+                    "url": url,
+                    "alt": _clean_label(values.get("alt")) or "Inline image",
+                    "role": "inline",
+                    "width": str(width),
+                    "height": str(height),
+                    "marker": image_marker,
+                }
+            )
             return
-        if tag == "video":
+        if tag == "video" and not blocked:
             video_url = _public_absolute_url(self.base_url, values.get("src", ""))
             poster_url = _public_absolute_url(self.base_url, values.get("poster", ""))
-            self._video = {"url": video_url, "poster_url": poster_url, "title": "HTML5 video", "kind": "video"}
+            self._video = {
+                "url": video_url,
+                "poster_url": poster_url,
+                "title": _clean_label(values.get("title")) or "HTML5 video",
+                "kind": "video",
+            }
             self.videos.append(self._video)
             return
         if tag == "source" and self._video is not None and not self._video.get("url"):
             self._video["url"] = _public_absolute_url(self.base_url, values.get("src", ""))
             return
-        if tag == "iframe":
+        if tag == "iframe" and not blocked:
             url = _public_absolute_url(self.base_url, values.get("src", ""))
             if not url:
                 return
@@ -413,7 +531,7 @@ class _RichContentParser(HTMLParser):
                     }
                 )
             return
-        if tag == "a":
+        if tag == "a" and not blocked:
             url = _public_absolute_url(self.base_url, values.get("href", ""))
             if url:
                 self._anchor = {"url": url, "text_parts": [], "title": _clean_label(values.get("title"))}
@@ -432,6 +550,10 @@ class _RichContentParser(HTMLParser):
             self._anchor = None
         elif tag == "video":
             self._video = None
+        for index in range(len(self._stack) - 1, -1, -1):
+            if self._stack[index][0] == tag:
+                del self._stack[index:]
+                break
 
 
 def extract_rich_references(html_text: str, *, base_url: str) -> dict[str, list[dict[str, str]]]:
@@ -470,25 +592,27 @@ def extract_web_content(response: FetchedResponse, *, resource_kind: str) -> tup
     metadata_obj = extract_metadata(html_text, default_url=response.final_url)
     metadata = {
         "title": sanitize_title(getattr(metadata_obj, "title", "")) or None,
-        "author": str(getattr(metadata_obj, "author", "") or "").strip() or None,
-        "date": str(getattr(metadata_obj, "date", "") or "").strip() or None,
-        "sitename": str(getattr(metadata_obj, "sitename", "") or "").strip() or None,
+        "author": _clean_label(getattr(metadata_obj, "author", ""), limit=500) or None,
+        "date": _clean_label(getattr(metadata_obj, "date", ""), limit=80) or None,
+        "sitename": _clean_label(getattr(metadata_obj, "sitename", ""), limit=240) or None,
     }
+    extraction_html = _html_with_video_placeholders(html_text, base_url=response.final_url)
     markdown = extract(
-        html_text,
+        extraction_html,
         url=response.final_url,
         output_format="markdown",
         include_comments=False,
         include_tables=True,
+        include_images=True,
         include_formatting=True,
         with_metadata=False,
         favor_recall=(resource_kind == "project"),
     )
     fallback_title, fallback_text = _fallback_extract(html_text)
-    content = str(markdown or "").strip() or fallback_text
+    content = _sanitize_extracted_markdown(str(markdown or "").strip() or fallback_text)
     if len(re.sub(r"\s+", " ", content)) < 40:
         raise WebExtractionError("No meaningful main content could be extracted from the page.")
-    metadata["title"] = metadata["title"] or fallback_title or None
+    metadata["title"] = metadata["title"] or sanitize_title(fallback_title) or None
     return content, metadata
 
 
