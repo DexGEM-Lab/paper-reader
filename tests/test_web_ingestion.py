@@ -321,8 +321,9 @@ class RichContentTests(unittest.TestCase):
         self.assertNotIn("&amp;", markdown)
         self.assertNotIn("## Media", markdown)
         self.assertNotIn("University Logo", markdown)
+        self.assertNotIn("Lab Logo", markdown)
         self.assertNotIn("Privacy", markdown)
-        self.assertFalse(any("university-logo" in url or "twitter-card" in url or "twitter-icon" in url for url in fetched_urls))
+        self.assertFalse(any("university-logo" in url or "lab-brand" in url or "twitter-card" in url or "twitter-icon" in url for url in fetched_urls))
 
     def test_blog_fixture_keeps_images_between_their_paragraphs(self) -> None:
         page_url = "https://blog.example.org/tactile-policy"

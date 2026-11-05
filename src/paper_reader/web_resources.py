@@ -77,14 +77,14 @@ _NEWS_DOMAINS = frozenset(
 _PROJECT_DOMAINS = frozenset({"github.com", "gitlab.com", "huggingface.co", "replicate.com"})
 _PROJECT_PATH_RE = re.compile(r"(?:^|[-_/])(project|projects|demo|demos|showcase|repository|repo)(?:[-_/]|$)", re.IGNORECASE)
 _MEDIA_JUNK_RE = re.compile(
-    r"(?:^|[-_/.:\\s])(logo|icon|avatar|badge|sprite|emoji|favicon|social|share-button|twitter-card)(?:[-_/.:\\s]|$)",
+    r"(?:^|[-_/.:\s])(logo|icon|avatar|badge|sprite|emoji|favicon|social|share-button|twitter-card)(?:[-_/.:\s]|$)",
     re.IGNORECASE,
 )
 _MEDIA_CONTAINER_JUNK_RE = re.compile(
-    r"(?:^|[-_\\s])(logo|navbar|navigation|masthead|site-header|site-footer|social|share-buttons|author-avatar)(?:[-_\\s]|$)",
+    r"(?:^|[-_\s])(logo|navbar|navigation|masthead|site-header|site-footer|social|share-buttons|author-avatar)(?:[-_\s]|$)",
     re.IGNORECASE,
 )
-_NAV_BANNER_RE = re.compile(r"(?:^|[-_/.:\\s])(banner|navbar|navigation|masthead|header|promo)(?:[-_/.:\\s]|$)", re.IGNORECASE)
+_NAV_BANNER_RE = re.compile(r"(?:^|[-_/.:\s])(banner|navbar|navigation|masthead|header|promo)(?:[-_/.:\s]|$)", re.IGNORECASE)
 _MARKDOWN_IMAGE_RE = re.compile(r"!\[([^\]\n]*)\]\((\S+?)(?:\s+[\"'][^\"']*[\"'])?\)")
 _RAW_HTML_TAG_RE = re.compile(r"</?[A-Za-z][^>]*>|<!--.*?-->", re.DOTALL)
 _VIDEO_PLACEHOLDER_PREFIX = "https://paper-reader.invalid/video/"
