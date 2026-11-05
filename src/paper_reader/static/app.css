@@ -1079,10 +1079,28 @@ label span {
 }
 
 .team-inline-form button[type="submit"] {
-  min-height: 44px;
+  min-height: 36px;
   background: var(--ink);
   border-color: var(--ink);
   color: var(--paper);
+}
+
+.composer-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.composer-actions button[type="submit"] {
+  padding: 6px 16px;
+  font-size: var(--text-label);
+}
+
+.composer-hint {
+  font-size: var(--text-meta);
+  color: var(--ink-30);
+  white-space: nowrap;
 }
 
 .team-inline-form button[type="submit"]:hover {

@@ -666,7 +666,10 @@
             <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
             <input type="hidden" name="tab" value="{{ selected_tab }}">
             <textarea name="body" rows="3" placeholder="例如：这篇方法值得继续读；我建议下一步先看实验部分，或者这里的设定我还没完全看懂"></textarea>
-            <button type="submit">发布评论</button>
+            <div class="composer-actions">
+              <span class="composer-hint">⌘⏎ 发送</span>
+              <button type="submit">发布评论</button>
+            </div>
           </form>
           {{ render_comments(selected_paper_context.comments) }}
         </div>
@@ -725,7 +728,10 @@
           <input type="hidden" name="tab" value="{{ selected_tab }}">
           <input type="hidden" name="visibility" value="private">
           <textarea name="body" rows="3" placeholder="记一个只留给自己的问题，或者写下一条个人学习笔记"></textarea>
-          <button type="submit">发到我爱学</button>
+          <div class="composer-actions">
+            <span class="composer-hint">⌘⏎ 发送</span>
+            <button type="submit">发到我爱学</button>
+          </div>
         </form>
       </section>
 
@@ -782,7 +788,10 @@
           <input type="hidden" name="tab" value="{{ selected_tab }}">
           <input type="hidden" name="visibility" value="shared">
           <textarea name="body" rows="3" placeholder="写下想让大家一起聊的问题、判断或结论，也可以叫上 Paper Bot 一起参与"></textarea>
-          <button type="submit">发到一起学</button>
+          <div class="composer-actions">
+            <span class="composer-hint">⌘⏎ 发送</span>
+            <button type="submit">发到一起学</button>
+          </div>
         </form>
       </section>
     {% else %}
@@ -804,6 +813,21 @@
       el.addEventListener("scroll", () => sync(el), { passive: true });
     });
   })();
+
+  // Cmd/Ctrl+Enter sends from any chat/comment composer; Enter stays a newline.
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || !(event.metaKey || event.ctrlKey)) return;
+    const target = event.target;
+    if (!(target instanceof HTMLTextAreaElement)) return;
+    const form = target.closest("form.team-inline-form");
+    if (!form) return;
+    event.preventDefault();
+    if (typeof form.requestSubmit === "function") {
+      form.requestSubmit();
+    } else {
+      form.submit();
+    }
+  });
 </script>
 
 <nav class="mobile-tab-bar" aria-label="移动端主导航">
