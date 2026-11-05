@@ -2114,6 +2114,14 @@ table {
     background: var(--paper);
     border-left: var(--border-strong);
   }
+
+  /* Fullscreen chat must escape the fixed drawer overlay. */
+  body.assistant-expanded .workspace-shell.tri-workspace .pane-right {
+    position: relative;
+    inset: auto;
+    width: auto;
+    height: 100%;
+  }
 }
 
 /* ---------------------------------------------------------- item header */
@@ -2484,6 +2492,11 @@ table {
   .workspace-shell.tri-workspace .pane-left,
   .workspace-shell.tri-workspace .pane-right {
     display: none !important;
+  }
+
+  /* 全屏交流 overrides the mobile pane switch. */
+  body.assistant-expanded .workspace-shell.tri-workspace .pane-right {
+    display: flex !important;
   }
 
   body.mobile-view-library .workspace-shell.tri-workspace .pane-left {

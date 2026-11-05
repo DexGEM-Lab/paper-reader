@@ -1575,8 +1575,8 @@
       function chatOutlineWidthBounds() {
         const layoutWidth = activeChatLayoutWidth();
         return {
-          min: 220,
-          max: Math.max(260, Math.min(520, Math.floor(layoutWidth * 0.52))),
+          min: 240,
+          max: Math.max(240, Math.min(280, Math.floor(layoutWidth * 0.3))),
         };
       }
 
@@ -2492,7 +2492,9 @@
         list.innerHTML = messages.map((message, index) => {
           const anchorId = messageAnchorId(visibility, message, index);
           const speaker = (message.querySelector(".chat-message-copy strong")?.textContent || `对话 ${index + 1}`).trim();
-          const createdAt = (message.querySelector(".chat-message-copy small")?.textContent || `第 ${index + 1} 条`).trim();
+          const rawCreatedAt = (message.querySelector(".chat-message-copy small")?.textContent || `第 ${index + 1} 条`).trim();
+          const isoTime = rawCreatedAt.split("T")[1];
+          const createdAt = isoTime ? isoTime.slice(0, 5) : rawCreatedAt;
           const bodyText = message.querySelector(".team-chat-body")?.textContent || "";
           const avatarHtml = outlineAvatarHtml(message, speaker.slice(0, 1) || "?");
           return `
