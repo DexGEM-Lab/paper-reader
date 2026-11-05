@@ -111,6 +111,9 @@ def test_dedup_persists_and_source_message_id(app):
     queue_after_restart = Mock()
     process_event(p, db, queue_after_restart, frozenset({'oc_allowed'}))
     queue_after_restart.submit.assert_not_called()
+    p['event']['message']['content'] = json.dumps({'text': 'https://new.example'})
+    process_event(p, db, queue_after_restart, frozenset({'oc_allowed'}))
+    queue_after_restart.submit.assert_not_called()
     with app.team_store._connect() as conn:
         conn.execute("INSERT INTO papers(rel_path, file_name, folder, extension, title, display_title, modified_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", ("item.md", "item.md", "", ".md", "Item", "Item", "2026", "2026", "2026"))
     app.team_store.add_source('item.md', source_type='feishu', source_value='oc_allowed', source_url='https://example.org/a', source_context='context', sender_open_id='ou_sender', message_id='om_1')

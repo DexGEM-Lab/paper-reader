@@ -104,8 +104,12 @@ def process_event(payload: dict[str, Any], db_path: Path, queue: Any, allowed: f
                    "context_text": context, "msg_time_iso": time_iso, "url": url} for url in urls]
     with sqlite3.connect(db_path, timeout=10) as db:
         db.execute("CREATE TABLE IF NOT EXISTS feishu_event_urls (event_id TEXT, url TEXT, PRIMARY KEY (event_id, url))")
+        db.execute("CREATE TABLE IF NOT EXISTS feishu_processed_events (event_id TEXT PRIMARY KEY)")
         for url, entry in zip(urls, provenance):
             db.execute("BEGIN IMMEDIATE")
+            if db.execute("SELECT 1 FROM feishu_processed_events WHERE event_id = ?", (event_id,)).fetchone():
+                db.commit()
+                return
             if db.execute("SELECT 1 FROM feishu_event_urls WHERE event_id = ? AND url = ?", (event_id, url)).fetchone():
                 db.commit()
                 continue
@@ -114,6 +118,7 @@ def process_event(payload: dict[str, Any], db_path: Path, queue: Any, allowed: f
                          source="feishu")
             db.execute("INSERT INTO feishu_event_urls VALUES (?, ?)", (event_id, url))
             db.commit()
+        db.execute("INSERT OR IGNORE INTO feishu_processed_events VALUES (?)", (event_id,))
     LOGGER.info("Feishu event queued: chat=%s message=%s links=%d", chat_id, message.get("message_id"), len(urls))
 
 
