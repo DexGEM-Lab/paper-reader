@@ -213,7 +213,7 @@
             <input type="hidden" name="mode" value="toggle">
             <button type="submit" class="secondary item-action workspace-recommend-button {% if selected_paper_context.recommended_by_current_user %}is-accent{% endif %}">推荐 · {{ selected_paper_context.recommendation_count }}</button>
           </form>
-          <button type="button" class="button-link secondary item-action" data-pane-button="right" data-toggle-pane="right">评论 · {{ selected_paper_context.comment_count }}</button>
+          <button type="button" class="button-link secondary item-action" data-pane-button="right" data-toggle-pane="right">交流</button>
           {% if selected_share_payload %}
             <button
               type="button"
@@ -347,6 +347,13 @@
               {% endfor %}
             </div>
           </section>
+
+          {% if selected_paper_context.comments %}
+            <section class="item-details-section comment-history-compact" aria-labelledby="comment-history-title">
+              <h3 id="comment-history-title">历史评论 · 只读</h3>
+              {{ render_comments(selected_paper_context.comments) }}
+            </section>
+          {% endif %}
 
           <section class="item-details-section">
             <h3>标签管理</h3>
@@ -635,46 +642,11 @@
     </div>
 
     <div class="assistant-switch-row" role="tablist" aria-label="聊天区域切换">
-      <button type="button" class="assistant-switch-button" data-chat-switch="activity" aria-pressed="false">协作记录</button>
       <button type="button" class="assistant-switch-button" data-chat-switch="private" aria-pressed="false">我爱学</button>
       <button type="button" class="assistant-switch-button" data-chat-switch="shared" aria-pressed="false">一起学</button>
     </div>
 
     {% if selected_paper %}
-      <section class="assistant-card team-chat-card team-activity-card" data-chat-panel="activity" id="chat-activity">
-        <div class="team-paper-card-head compact-head">
-          <div>
-            <strong>协作记录</strong>
-            <span>围绕这篇论文的交流统一留在评论区。</span>
-          </div>
-          <span class="activity-count-line">{{ selected_paper_context.recommendation_count }} 推荐 / {{ selected_paper_context.comment_count }} 评</span>
-        </div>
-
-        <div class="activity-section">
-          <div class="activity-section-head">
-            <div>
-              <strong>评论</strong>
-              <p>如果你觉得这篇值得继续读、哪里有疑问、或者复现时踩了坑，都直接写在这里。</p>
-            </div>
-          </div>
-          <form action="{{ url_for('comment_route') }}" method="post" class="team-inline-form activity-comment-form">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <input type="hidden" name="folder" value="{{ current_folder }}">
-            <input type="hidden" name="q" value="{{ query }}">
-            <input type="hidden" name="sort" value="{{ sort_by }}">
-            <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
-            <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
-            <input type="hidden" name="tab" value="{{ selected_tab }}">
-            <textarea name="body" rows="3" placeholder="例如：这篇方法值得继续读；我建议下一步先看实验部分，或者这里的设定我还没完全看懂"></textarea>
-            <div class="composer-actions">
-              <span class="composer-hint">⌘⏎ 发送</span>
-              <button type="submit">发布评论</button>
-            </div>
-          </form>
-          {{ render_comments(selected_paper_context.comments) }}
-        </div>
-      </section>
-
       <section class="assistant-card team-chat-card" data-chat-panel="private" id="chat-private">
         <div class="team-paper-card-head compact-head">
           <div>
@@ -695,6 +667,7 @@
                   </div>
                 </header>
                 <div class="team-chat-body markdown-render">{{ message.body_html|safe }}</div>
+                {% if message.status == 'failed' %}<button type="button" class="chat-retry-button" data-chat-retry>重试</button>{% endif %}
               </article>
             {% else %}
               <p class="team-empty-copy">这里就是“我爱学”，适合记只想留给自己看的问题、复现思路和临时笔记。</p>
@@ -755,6 +728,7 @@
                   </div>
                 </header>
                 <div class="team-chat-body markdown-render">{{ message.body_html|safe }}</div>
+                {% if message.status == 'failed' %}<button type="button" class="chat-retry-button" data-chat-retry>重试</button>{% endif %}
               </article>
             {% else %}
               <p class="team-empty-copy">这里就是“一起学”，只要大家打开这篇论文，就能接着前面的话题继续往下聊。</p>
@@ -797,7 +771,7 @@
     {% else %}
       <div class="assistant-empty">
         <strong>还没有选中文件</strong>
-        <p>选中一篇论文后，这里会显示“协作记录”、“我爱学”和“一起学”。</p>
+        <p>选中一篇论文后，这里会显示“我爱学”和“一起学”。</p>
       </div>
     {% endif %}
   </aside>
@@ -1287,7 +1261,7 @@
       };
       const layoutStateKey = "paper-reader-layout-v5";
       const collapsibleStateKey = "paper-reader-collapsible-v1";
-      const chatPanelStateKey = "paper-reader-chat-panel-v2";
+      const chatPanelStateKey = "paper-reader-chat-panel-v3";
       const sidebarPanelStateKey = "paper-reader-sidebar-panel-v1";
       const defaultLayoutState = {
         leftWidth: 288,
@@ -1301,7 +1275,7 @@
       };
       let layoutState = loadLayoutState();
       let collapsibleState = loadCollapsibleState();
-      let activeChatPanel = loadSimpleValue(chatPanelStateKey, "activity");
+      let activeChatPanel = loadSimpleValue(chatPanelStateKey, "private");
       let activeSidebarPanel = loadSimpleValue(sidebarPanelStateKey, "library");
       let settingsReturnFocus = null;
       let shareFeedbackTimer = null;
@@ -2304,7 +2278,7 @@
           buttons: chatSwitchButtons,
           panels: chatPanels,
           target,
-          fallback: "activity",
+          fallback: "private",
           buttonAttribute: "chatSwitch",
           panelAttribute: "chatPanel",
         });
@@ -2364,6 +2338,7 @@
               </div>
             </header>
             <div class="team-chat-body markdown-render">${bodyHtml}</div>
+            ${message.status === "failed" ? '<button type="button" class="chat-retry-button" data-chat-retry>重试</button>' : ""}
           </article>
         `;
       }
@@ -2765,6 +2740,35 @@
           scheduleChatRefresh(1200);
         }
       }
+
+      async function retryFailedChat(button) {
+        const failedMessage = button.closest(".team-chat-message");
+        const panel = button.closest("[data-chat-panel]");
+        const form = panel ? panel.querySelector("[data-chat-form]") : null;
+        const textarea = form ? form.querySelector('textarea[name="body"]') : null;
+        let previous = failedMessage ? failedMessage.previousElementSibling : null;
+        while (previous && !previous.classList.contains("role-user")) {
+          previous = previous.previousElementSibling;
+        }
+        const question = previous ? previous.querySelector(".team-chat-body")?.textContent.trim() : "";
+        if (!form || !textarea || !question) return;
+        textarea.value = question;
+        button.disabled = true;
+        try {
+          await sendChatMessage(form);
+        } finally {
+          button.disabled = false;
+        }
+      }
+
+      document.addEventListener("click", (event) => {
+        const retryButton = event.target.closest("[data-chat-retry]");
+        if (!retryButton) return;
+        retryFailedChat(retryButton).catch((error) => {
+          console.error("Chat retry failed", error);
+          window.alert(error.message || "重试没有成功，请稍后再试。");
+        });
+      });
 
       function renderJobs(snapshot) {
         if (!dashboard) return;

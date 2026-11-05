@@ -85,7 +85,7 @@ PAPER_READER_FEISHU_API_BASE_URL=https://open.feishu.cn
 
 ### LLM（DexGEM LiteLLM 网关）
 
-所有论文解读、标签生成、聊天和 Insights 调用都经由团队的 OpenAI 兼容 LiteLLM 网关；服务不依赖本机 CLI、登录态或子进程。生产环境需要配置专用 virtual key：
+论文解读、标签生成和 Insights 调用经由团队的 OpenAI 兼容 LiteLLM 网关。Agent Chat 开关关闭时，聊天也继续使用这条兼容路径。生产环境需要配置专用 virtual key：
 
 ```dotenv
 PAPER_READER_LLM_BASE_URL=https://litellm.dex-gem.ai/v1
@@ -102,7 +102,20 @@ PAPER_READER_LLM_TIMEOUT=120
 PAPER_READER_LLM_CONTEXT_TOKENS=12000
 ```
 
-默认 base URL、模型、限速和超时如上。未知的 SQLite Prompt 模型会记录警告并回退到 `PAPER_READER_LLM_MODEL`。HTTP 聊天使用网关 SSE 增量响应，并为每次浏览器流式会话发送 `x-litellm-session-id`。文档请求先抽取 PDF/DOCX/Markdown 文本；有 arXiv Markdown 缓存时优先使用缓存；超过上下文预算时保留开头和结尾，省略中间正文。
+默认 base URL、模型、限速和超时如上。未知的 SQLite Prompt 模型会记录警告并回退到 `PAPER_READER_LLM_MODEL`。兼容聊天使用网关 SSE 增量响应，并为每次浏览器流式会话发送 `x-litellm-session-id`。文档请求先抽取 PDF/DOCX/Markdown 文本；有 arXiv Markdown 缓存时优先使用缓存；超过上下文预算时保留开头和结尾，省略中间正文。
+
+### Pi Agent Chat
+
+我爱学与一起学可以切换到持久 Pi 会话。开关默认关闭，只有 VPS 上的 Pi 运行环境就绪后才启用：
+
+```dotenv
+PAPER_READER_AGENT_CHAT_ENABLED=false
+PAPER_READER_PI_BIN=pi
+PAPER_READER_PI_HOME=/opt/paper-reader/pi-home
+PAPER_READER_PI_TIMEOUT=300
+```
+
+启用后，我爱学按用户与论文隔离会话，一起学按论文共享会话。状态写入 `<data>/agent-sessions/`；每轮刷新本地论文、网页快照、附件和已有解读材料，并从 Pi session JSONL 投影出简洁的工具状态、过程叙述和最终回答。聊天正文仍写入现有 SQLite `chat_messages` 表。每个会话同一时间只执行一轮，重叠请求返回 HTTP 409。
 
 ### 批量导入飞书历史链接
 

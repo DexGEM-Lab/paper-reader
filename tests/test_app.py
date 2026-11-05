@@ -15,6 +15,7 @@ from unittest.mock import ANY, patch
 
 from pypdf import PdfWriter
 
+from src.paper_reader.agent_chat import AgentChatEvent
 from src.paper_reader.app import create_app, load_env_file_values, normalize_import_target, parse_import_targets
 from src.paper_reader.chat_queue import ChatJob
 from src.paper_reader.ai_summary import DEFAULT_USER_PROMPT
@@ -1352,28 +1353,21 @@ class PaperReaderAppTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200)
 
-        response = self.client.post(
-            "/comments",
-            data={
-                "folder": "",
-                "q": "",
-                "sort": "date_desc",
-                "show_done": "",
-                "rel_path": "paper.pdf",
-                "tab": "source",
-                "body": "这个结果很适合组会分享。",
-            },
-            follow_redirects=True,
-        )
+        admin_user = self.app.team_store.get_user_by_username("admin")
+        assert admin_user is not None
+        self.app.team_store.add_comment("paper.pdf", admin_user.id, "这个结果很适合组会分享。")
+        response = self.client.get("/?paper=paper.pdf&tab=source")
         html = response.get_data(as_text=True)
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("1 人", html)
         self.assertIn("#robotics", html)
         self.assertIn("1 评论", html)
-        self.assertIn("协作记录", html)
+        self.assertNotIn("协作记录", html)
+        self.assertIn("历史评论 · 只读", html)
         self.assertIn("这个结果很适合组会分享。", html)
-        self.assertIn("评论", html)
+        self.assertNotIn('action="/comments"', html)
+        self.assertEqual(self.client.post("/comments", data={"body": "new"}).status_code, 404)
 
         search_response = self.client.get("/?q=robotics")
         self.assertIn("Robot Policy", search_response.get_data(as_text=True))
@@ -1642,6 +1636,99 @@ class PaperReaderAppTests(unittest.TestCase):
         assert context_payload is not None
         self.assertIn("completed", str(context_payload["private"]))
         self.assertIn("<strong>流式回答</strong>", str(context_payload["private"]))
+
+    def test_agent_chat_stream_persists_final_and_hides_tool_noise(self) -> None:
+        self.make_pdf(self.library / "paper.pdf", "Pi Agent Chat Paper")
+
+        class FakeAgentChat:
+            def session_key_for(self, rel_path, *, visibility, user_id):
+                return f"{visibility}:{user_id}:42"
+
+            def try_reserve(self, key):
+                return True
+
+            def release(self, key):
+                return None
+
+            def run_turn(self, **kwargs):
+                emit = kwargs["on_event"]
+                emit(AgentChatEvent(kind="status", text="正在使用工具: read", tool_name="read"))
+                emit(AgentChatEvent(kind="narration", text="我先核对第 4 节。"))
+                emit(AgentChatEvent(kind="final", text="最终回答。\n\n来源定位：paper.pdf 第 4 节。", final=True))
+                return "最终回答。\n\n来源定位：paper.pdf 第 4 节。"
+
+        fake_agent = FakeAgentChat()
+        self.app.agent_chat = fake_agent
+        self.app.chat_queue.agent_chat = fake_agent
+        response = self.client.post(
+            "/chat/send-stream",
+            data={"rel_path": "paper.pdf", "visibility": "shared", "body": "请总结"},
+        )
+        payload = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("正在使用工具: read", payload)
+        self.assertIn("我先核对第 4 节", payload)
+        self.assertIn("最终回答", payload)
+        self.assertNotIn("RAW TOOL DUMP", payload)
+        context = self.client.get("/chat/context?paper=paper.pdf").get_json()
+        assert context is not None
+        self.assertIn("最终回答", str(context["shared"]))
+        self.assertIn("completed", str(context["shared"]))
+        self.assertIn("'model': 'pi'", str(context["shared"]))
+
+    def test_agent_chat_rejects_concurrent_turn_for_same_session(self) -> None:
+        self.make_pdf(self.library / "paper.pdf", "Busy Pi Agent Chat Paper")
+
+        class BusyAgentChat:
+            def session_key_for(self, rel_path, *, visibility, user_id):
+                return "shared:42"
+
+            def try_reserve(self, key):
+                return False
+
+        self.app.agent_chat = BusyAgentChat()
+        response = self.client.post(
+            "/chat/send-stream",
+            data={"rel_path": "paper.pdf", "visibility": "shared", "body": "第二条消息"},
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertTrue(response.get_json()["busy"])
+        context = self.client.get("/chat/context?paper=paper.pdf").get_json()
+        assert context is not None
+        self.assertEqual(context["shared"]["count"], 0)
+
+    def test_agent_failure_is_persisted_with_retry_action(self) -> None:
+        self.make_pdf(self.library / "paper.pdf", "Failed Pi Agent Chat Paper")
+
+        class FailedAgentChat:
+            def session_key_for(self, rel_path, *, visibility, user_id):
+                return "private:1:42"
+
+            def try_reserve(self, key):
+                return True
+
+            def release(self, key):
+                return None
+
+            def run_turn(self, **kwargs):
+                raise RuntimeError("Pi agent 未安装或 PAPER_READER_PI_BIN 配置错误。")
+
+        fake_agent = FailedAgentChat()
+        self.app.agent_chat = fake_agent
+        self.app.chat_queue.agent_chat = fake_agent
+        response = self.client.post(
+            "/chat/send-stream",
+            data={"rel_path": "paper.pdf", "visibility": "private", "body": "请重试"},
+        )
+        payload = response.get_data(as_text=True)
+
+        self.assertIn('"event": "error"', payload)
+        self.assertIn("Pi agent 未安装", payload)
+        html = self.client.get("/?paper=paper.pdf&tab=source").get_data(as_text=True)
+        self.assertIn('data-chat-retry', html)
+        self.assertIn("重试", html)
 
     def test_chat_context_eventually_shows_background_reply(self) -> None:
         self.make_pdf(self.library / "paper.pdf", "Background Chat Paper")
@@ -2235,15 +2322,16 @@ class PaperReaderAppTests(unittest.TestCase):
         self.assertIn('data-sidebar-switch="library"', html)
         self.assertIn('data-sidebar-panel="library"', html)
         self.assertIn("讨论与笔记", html)
-        self.assertIn('data-chat-switch="activity"', html)
+        self.assertNotIn('data-chat-switch="activity"', html)
         self.assertIn('data-chat-switch="private"', html)
-        self.assertIn('data-chat-panel="activity"', html)
+        self.assertIn('data-chat-switch="shared"', html)
+        self.assertNotIn('data-chat-panel="activity"', html)
         self.assertIn('data-chat-panel="private"', html)
         self.assertIn('data-chat-panel="shared"', html)
         self.assertIn('id="chat-shared" hidden', html)
         self.assertIn("workspace-recommend-button", html)
         self.assertIn("发到一起学", html)
-        self.assertIn("围绕这篇论文的交流统一留在评论区", html)
+        self.assertNotIn("协作记录", html)
         self.assertIn("compact-tag-toggle", html)
         self.assertIn("添标签", html)
         self.assertIn("原文阅读", html)

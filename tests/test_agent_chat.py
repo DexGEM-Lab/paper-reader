@@ -10,6 +10,7 @@ from src.paper_reader.agent_chat import (
     extract_pi_chat_events,
     pi_assistant_is_final_turn_end,
 )
+from src.paper_reader.config import load_config
 
 
 FIXTURE = Path(__file__).with_name("fixtures") / "pi_session.jsonl"
@@ -17,6 +18,29 @@ FIXTURE = Path(__file__).with_name("fixtures") / "pi_session.jsonl"
 
 def fixture_rows() -> list[dict]:
     return [json.loads(line) for line in FIXTURE.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def test_agent_chat_config_defaults_and_overrides(tmp_path: Path) -> None:
+    defaults = load_config(project_dir=tmp_path, cwd=tmp_path, environ={})
+    assert defaults.agent_chat_enabled is False
+    assert defaults.pi_bin == "pi"
+    assert defaults.pi_home == Path("/opt/paper-reader/pi-home")
+    assert defaults.pi_timeout == 300
+
+    configured = load_config(
+        project_dir=tmp_path,
+        cwd=tmp_path,
+        environ={
+            "PAPER_READER_AGENT_CHAT_ENABLED": "true",
+            "PAPER_READER_PI_BIN": "/opt/pi/bin/pi",
+            "PAPER_READER_PI_HOME": "runtime/pi-home",
+            "PAPER_READER_PI_TIMEOUT": "45",
+        },
+    )
+    assert configured.agent_chat_enabled is True
+    assert configured.pi_bin == "/opt/pi/bin/pi"
+    assert configured.pi_home == (tmp_path / "runtime/pi-home").resolve()
+    assert configured.pi_timeout == 45
 
 
 def test_session_keying_private_and_shared() -> None:

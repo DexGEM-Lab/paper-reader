@@ -11,7 +11,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping
+from typing import Any, Callable, Mapping
 
 
 @dataclass(frozen=True, slots=True)
@@ -366,7 +366,7 @@ class PiAgentChat:
 
         env = os.environ.copy()
         env["PI_HOME"] = str(self.pi_home)
-        env.setdefault("PI_CODING_AGENT_DIR", str(self.pi_home))
+        env["PI_CODING_AGENT_DIR"] = str(self.pi_home)
         stderr_path = session_root / "last-stderr.log"
         started = time.monotonic()
         with stderr_path.open("wb") as stderr_handle:

@@ -28,6 +28,7 @@ from markupsafe import Markup
 from werkzeug.utils import secure_filename
 
 from .action_queue import ActionRecord, ActionTaskQueue
+from .agent_chat import AgentChatEvent, PiAgentChat
 from .ai_summary import DEFAULT_MODEL, DEFAULT_USER_PROMPT, run_prompt_on_document
 from .arxiv_markdown import (
     ARXIV_MARKDOWN_DIR_NAME,
@@ -2154,6 +2155,10 @@ def create_app(
     app.config["LLM_ALLOWED_MODELS"] = runtime_config.llm_allowed_models
     app.config["LLM_QPS"] = runtime_config.llm_qps
     app.config["LLM_TIMEOUT"] = runtime_config.llm_timeout
+    app.config["AGENT_CHAT_ENABLED"] = runtime_config.agent_chat_enabled
+    app.config["PI_BIN"] = runtime_config.pi_bin
+    app.config["PI_HOME"] = runtime_config.pi_home
+    app.config["PI_TIMEOUT"] = runtime_config.pi_timeout
     app.config["SCREEN_IMPORTS"] = runtime_config.screen_imports
     app.config["DISCOVERY_ENABLED"] = runtime_config.discovery_enabled
     app.config["DISCOVERY_HOUR"] = runtime_config.discovery_hour
@@ -3667,11 +3672,25 @@ def create_app(
             for visibility, thread in context.items()
         }
 
+    app.agent_chat = (  # type: ignore[attr-defined]
+        PiAgentChat(
+            data_dir=runtime_config.data_dir,
+            pi_bin=runtime_config.pi_bin,
+            pi_home=runtime_config.pi_home,
+            timeout_seconds=runtime_config.pi_timeout,
+            library=app.library,
+            prompt_store=app.prompt_store,
+            team_store=app.team_store,
+        )
+        if runtime_config.agent_chat_enabled
+        else None
+    )
     app.chat_queue = PaperChatQueue(  # type: ignore[attr-defined]
         library=app.library,
         prompt_store=app.prompt_store,
         team_store=app.team_store,
         prompt_context_loader=load_chat_prompt_contexts,
+        agent_chat=app.agent_chat,
     )
     migrate_legacy_done_documents()
 
@@ -4417,28 +4436,6 @@ def create_app(
             flash("论文不存在。", "error")
         return redirect_to_index(current_folder, query, sort_by, rel_path or None, tab, show_done=show_done)
 
-    @app.post("/comments")
-    def comment_route() -> Any:
-        current_folder = request.form.get("folder", "")
-        query = request.form.get("q", "")
-        sort_by = request.form.get("sort", "date_desc")
-        show_done = parse_checkbox(request.form.get("show_done"))
-        rel_path = request.form.get("rel_path", "").strip("/")
-        tab = request.form.get("tab", "source")
-        actor = current_user()
-        if actor is None:
-            flash("请先登录。", "error")
-            return redirect_to_index(current_folder, query, sort_by, rel_path or None, tab, show_done=show_done)
-        parent_id_value = request.form.get("parent_id", "").strip()
-        try:
-            ensure_paper_metadata(rel_path)
-            parent_id = int(parent_id_value) if parent_id_value else None
-            app.team_store.add_comment(rel_path, actor.id, request.form.get("body", ""), parent_id=parent_id)  # type: ignore[attr-defined]
-            flash("评论已发布。", "success")
-        except (ValueError, FileNotFoundError) as exc:
-            flash(str(exc), "error")
-        return redirect_to_index(current_folder, query, sort_by, rel_path or None, tab, show_done=show_done)
-
     @app.get("/chat/context")
     def chat_context_route() -> Any:
         rel_path = request.args.get("paper", "").strip("/")
@@ -4466,8 +4463,19 @@ def create_app(
             flash("请先登录。", "error")
             return redirect_to_index(current_folder, query, sort_by, rel_path or None, tab, show_done=show_done)
         message_body = request.form.get("body", "")
+        agent_session_key: str | None = None
         try:
             ensure_paper_metadata(rel_path)
+            if app.agent_chat is not None:  # type: ignore[attr-defined]
+                agent_session_key = app.agent_chat.session_key_for(  # type: ignore[attr-defined]
+                    rel_path, visibility=visibility, user_id=actor.id
+                )
+                if not app.agent_chat.try_reserve(agent_session_key):  # type: ignore[attr-defined]
+                    busy_message = "这个对话正在处理上一条消息，请稍后再试。"
+                    if wants_json:
+                        return {"error": busy_message, "busy": True}, 409
+                    flash(busy_message, "error")
+                    return redirect_to_index(current_folder, query, sort_by, rel_path or None, tab, show_done=show_done)
             user_message_id = app.team_store.add_chat_message(  # type: ignore[attr-defined]
                 rel_path,
                 visibility=visibility,
@@ -4488,7 +4496,7 @@ def create_app(
                 user_id=actor.id if visibility == "private" else None,
                 role="assistant",
                 status="pending",
-                model=runtime_config.llm_model,
+                model="pi" if agent_session_key is not None else runtime_config.llm_model,
             )
             app.chat_queue.submit(  # type: ignore[attr-defined]
                 rel_path=rel_path,
@@ -4499,6 +4507,7 @@ def create_app(
                 history=history,
                 assistant_message_id=assistant_message_id,
                 model=runtime_config.llm_model,
+                agent_session_key=agent_session_key,
             )
             if wants_json:
                 return {
@@ -4509,6 +4518,8 @@ def create_app(
                 }
             flash("消息已经发出，Paper Bot 正在回复。", "success")
         except (FileNotFoundError, ValueError) as exc:
+            if agent_session_key is not None and app.agent_chat is not None:  # type: ignore[attr-defined]
+                app.agent_chat.release(agent_session_key)  # type: ignore[attr-defined]
             if wants_json:
                 return {"error": str(exc)}, 400
             flash(str(exc), "error")
@@ -4522,8 +4533,15 @@ def create_app(
         if actor is None:
             return {"error": "unauthorized"}, 401
         message_body = request.form.get("body", "")
+        agent_session_key: str | None = None
         try:
             ensure_paper_metadata(rel_path)
+            if app.agent_chat is not None:  # type: ignore[attr-defined]
+                agent_session_key = app.agent_chat.session_key_for(  # type: ignore[attr-defined]
+                    rel_path, visibility=visibility, user_id=actor.id
+                )
+                if not app.agent_chat.try_reserve(agent_session_key):  # type: ignore[attr-defined]
+                    return {"error": "这个对话正在处理上一条消息，请稍后再试。", "busy": True}, 409
             user_message_id = app.team_store.add_chat_message(  # type: ignore[attr-defined]
                 rel_path,
                 visibility=visibility,
@@ -4544,9 +4562,11 @@ def create_app(
                 user_id=actor.id if visibility == "private" else None,
                 role="assistant",
                 status="pending",
-                model=runtime_config.llm_model,
+                model="pi" if agent_session_key is not None else runtime_config.llm_model,
             )
         except (FileNotFoundError, ValueError) as exc:
+            if agent_session_key is not None and app.agent_chat is not None:  # type: ignore[attr-defined]
+                app.agent_chat.release(agent_session_key)  # type: ignore[attr-defined]
             return {"error": str(exc)}, 400
 
         def event_line(event: str, **payload: Any) -> str:
@@ -4558,21 +4578,36 @@ def create_app(
 
             def run_answer() -> None:
                 try:
-                    document_path = Path(app.library.resolve_relative_path(rel_path))  # type: ignore[attr-defined]
-                    arxiv_markdown = app.library.ensure_arxiv_markdown_for_rel_path(rel_path)  # type: ignore[attr-defined]
-                    prompt_contexts = load_chat_prompt_contexts(rel_path, app.prompt_store.list_prompts())  # type: ignore[attr-defined]
-                    for chunk in stream_answer_question_about_document(
-                        document_path,
-                        question=message_body.strip(),
-                        visibility=visibility,
-                        history=history,
-                        prompt_contexts=prompt_contexts,
-                        arxiv_markdown_path=(arxiv_markdown.markdown_path if arxiv_markdown is not None else None),
-                        attachment_paths=app.team_store.attachment_paths_for_rel_path(rel_path),  # type: ignore[attr-defined]
-                        model=runtime_config.llm_model,
-                        session_id=f"paper-reader-chat-{assistant_message_id}",
-                    ):
-                        results.put(("partial", chunk))
+                    if agent_session_key is not None and app.agent_chat is not None:  # type: ignore[attr-defined]
+                        def emit_agent_event(event: AgentChatEvent) -> None:
+                            results.put((event.kind, event.text))
+
+                        app.agent_chat.run_turn(  # type: ignore[attr-defined]
+                            rel_path=rel_path,
+                            visibility=visibility,
+                            user_id=actor.id,
+                            display_name=actor.display_name,
+                            question=message_body.strip(),
+                            session_key=agent_session_key,
+                            on_event=emit_agent_event,
+                            reserved=True,
+                        )
+                    else:
+                        document_path = Path(app.library.resolve_relative_path(rel_path))  # type: ignore[attr-defined]
+                        arxiv_markdown = app.library.ensure_arxiv_markdown_for_rel_path(rel_path)  # type: ignore[attr-defined]
+                        prompt_contexts = load_chat_prompt_contexts(rel_path, app.prompt_store.list_prompts())  # type: ignore[attr-defined]
+                        for chunk in stream_answer_question_about_document(
+                            document_path,
+                            question=message_body.strip(),
+                            visibility=visibility,
+                            history=history,
+                            prompt_contexts=prompt_contexts,
+                            arxiv_markdown_path=(arxiv_markdown.markdown_path if arxiv_markdown is not None else None),
+                            attachment_paths=app.team_store.attachment_paths_for_rel_path(rel_path),  # type: ignore[attr-defined]
+                            model=runtime_config.llm_model,
+                            session_id=f"paper-reader-chat-{assistant_message_id}",
+                        ):
+                            results.put(("partial", chunk))
                     results.put(("done", ""))
                 except Exception as exc:
                     results.put(("error", str(exc)))
@@ -4594,6 +4629,44 @@ def create_app(
                     kind, value = results.get(timeout=2.0)
                 except queue.Empty:
                     yield event_line("status", assistant_message_id=assistant_message_id, text="Paper Bot 正在生成回复。")
+                    continue
+                if kind == "status":
+                    app.team_store.update_chat_message(  # type: ignore[attr-defined]
+                        assistant_message_id,
+                        body=value,
+                        status="pending",
+                        model="pi",
+                    )
+                    yield event_line("status", assistant_message_id=assistant_message_id, text=value)
+                    continue
+                if kind == "narration":
+                    app.team_store.update_chat_message(  # type: ignore[attr-defined]
+                        assistant_message_id,
+                        body=value,
+                        status="pending",
+                        model="pi",
+                    )
+                    yield event_line(
+                        "partial",
+                        assistant_message_id=assistant_message_id,
+                        body=value,
+                        body_html=render_markdown(value),
+                    )
+                    continue
+                if kind == "final":
+                    partial = value
+                    app.team_store.update_chat_message(  # type: ignore[attr-defined]
+                        assistant_message_id,
+                        body=partial,
+                        status="completed",
+                        model="pi",
+                    )
+                    yield event_line(
+                        "partial",
+                        assistant_message_id=assistant_message_id,
+                        body=partial,
+                        body_html=render_markdown(partial),
+                    )
                     continue
                 if kind == "partial":
                     partial += value
@@ -4619,7 +4692,7 @@ def create_app(
                         assistant_message_id,
                         body=body,
                         status="failed",
-                        model=runtime_config.llm_model,
+                        model="pi" if agent_session_key is not None else runtime_config.llm_model,
                     )
                     yield event_line(
                         "error",
@@ -4632,7 +4705,10 @@ def create_app(
                 if not partial:
                     body = "这次回复没有生成内容，请稍后重试。"
                     app.team_store.update_chat_message(  # type: ignore[attr-defined]
-                        assistant_message_id, body=body, status="failed", model=runtime_config.llm_model
+                        assistant_message_id,
+                        body=body,
+                        status="failed",
+                        model="pi" if agent_session_key is not None else runtime_config.llm_model,
                     )
                     yield event_line("error", assistant_message_id=assistant_message_id, message=body, body_html=render_markdown(body))
                     return
@@ -4640,7 +4716,7 @@ def create_app(
                     assistant_message_id,
                     body=partial,
                     status="completed",
-                    model=runtime_config.llm_model,
+                    model="pi" if agent_session_key is not None else runtime_config.llm_model,
                 )
                 yield event_line(
                     "done",
