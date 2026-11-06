@@ -2535,6 +2535,8 @@ table {
 
   body.mobile-view-library .workspace-shell.tri-workspace .pane-left {
     display: flex !important;
+    /* Override the legacy stacked-layout 24vh cap: the library is now a full pane. */
+    max-height: none;
   }
 
   body.mobile-view-chat .workspace-shell.tri-workspace .pane-right {
