@@ -30,7 +30,7 @@ MAX_ASSETS_PER_ITEM = 20
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 MIN_INLINE_IMAGE_BYTES = 40 * 1024
 MIN_INLINE_IMAGE_WIDTH = 200
-READER_MODE_VERSION = 2
+READER_MODE_VERSION = 3
 MAX_ATTACHMENTS_PER_ITEM = 3
 MAX_ATTACHMENT_CANDIDATES = 60
 MAX_SECOND_HOP_PAGES = 5
@@ -348,6 +348,24 @@ def _clean_label(value: object, *, limit: int = 240) -> str:
 
 def _sanitize_extracted_markdown(value: str) -> str:
     text = _unescape_fully(value).replace("\u00a0", " ")
+    # Trafilatura can flatten lists to consecutive markdown list items.
+    lines = text.splitlines()
+    cleaned = []
+    i = 0
+    while i < len(lines):
+        j = i
+        items = []
+        while j < len(lines) and (match := re.match(r"^\s*(?:[-*+] |\d+\. )(.*)$", lines[j])):
+            items.append(match.group(1).strip())
+            j += 1
+        if items:
+            if not _widget_items(items):
+                cleaned.extend(lines[i:j])
+            i = j
+        else:
+            cleaned.append(lines[i])
+            i += 1
+    text = "\n".join(cleaned)
     text = re.sub(r"<(?:sup|sub)[^>]*>(.*?)</(?:sup|sub)>", r"\1 ", text, flags=re.IGNORECASE | re.DOTALL)
     text = _RAW_HTML_TAG_RE.sub("", text)
     text = re.sub(r"[ \t]+([,.;:])", r"\1", text)
@@ -391,6 +409,29 @@ def _video_details(tag: str, values: dict[str, str], element: Any, *, base_url: 
     if not any(_host_matches(host, known) for known in ("youtube.com", "youtu.be", "bilibili.com")):
         return None
     return url, _clean_label(values.get("title")) or "Embedded video", _youtube_thumbnail(url)
+
+
+_WIDGET_KEYS = {"action", "object", "contact", "visibility"}
+
+
+def _widget_items(items: list[str]) -> bool:
+    # Distinct known demo fields distinguish this widget from ordinary lists.
+    return (len(items) >= 4 and len(items) % 2 == 0
+            and all(len(item) <= 12 for item in items[::2])
+            and all(len(item) <= 40 for item in items[1::2])
+            and len({item.casefold() for item in items[::2]} & _WIDGET_KEYS) >= 2)
+
+
+def _remove_widget_lists(html_text: str) -> str:
+    try:
+        document = lxml_html.fromstring(html_text)
+    except (ValueError, TypeError):
+        return html_text
+    for node in list(document.xpath("//ul|//ol")):
+        children = list(node)
+        if children and all(child.tag == "li" for child in children) and _widget_items([" ".join(child.text_content().split()) for child in children]):
+            node.drop_tree()
+    return lxml_html.tostring(document, encoding="unicode", method="html")
 
 
 def _html_with_video_placeholders(html_text: str, *, base_url: str) -> str:
@@ -587,6 +628,8 @@ class _RichContentParser(HTMLParser):
             url = _public_absolute_url(self.base_url, values.get("href", ""))
             if url:
                 self._anchor = {"url": url, "text_parts": [], "title": _clean_label(values.get("title"))}
+                if urlsplit(url).path.casefold().endswith((".mp4", ".webm", ".mov")):
+                    self.videos.append({"url": url, "title": _clean_label(values.get("title")) or "Video", "kind": "video"})
 
     def handle_data(self, data: str) -> None:
         if self._anchor is not None:
@@ -661,7 +704,7 @@ def extract_web_content(response: FetchedResponse, *, resource_kind: str) -> tup
         "date": _clean_label(getattr(metadata_obj, "date", ""), limit=80) or None,
         "sitename": _clean_label(getattr(metadata_obj, "sitename", ""), limit=240) or None,
     }
-    extraction_html = _html_with_video_placeholders(html_text, base_url=response.final_url)
+    extraction_html = _html_with_video_placeholders(_remove_widget_lists(html_text), base_url=response.final_url)
     markdown = extract(
         extraction_html,
         url=response.final_url,
@@ -673,7 +716,7 @@ def extract_web_content(response: FetchedResponse, *, resource_kind: str) -> tup
         with_metadata=False,
         favor_recall=(resource_kind == "project"),
     )
-    fallback_title, fallback_text = _fallback_extract(html_text)
+    fallback_title, fallback_text = _fallback_extract(_remove_widget_lists(html_text))
     content = _sanitize_extracted_markdown(str(markdown or "").strip() or fallback_text)
     if len(re.sub(r"\s+", " ", content)) < 40:
         raise WebExtractionError("No meaningful main content could be extracted from the page.")
@@ -744,8 +787,8 @@ def _rewrite_inline_media(
             poster = asset_by_source.get(str(video.get("poster_url") or ""))
             if poster is not None:
                 represented_assets.add(poster["source_url"])
-                return f"[![{title}]({poster['local_url']})]({video['url']})"
-            return f"[▶ {title}]({video['url']})"
+                return f"[![{title}]({poster['local_url']})]({video.get('local_url') or video['url']})"
+            return f"[▶ {title}]({video.get('local_url') or video['url']})"
         asset = asset_by_source.get(source_url)
         if asset is None:
             return ""
@@ -753,7 +796,35 @@ def _rewrite_inline_media(
         clean_alt = _clean_label(alt) or str(asset.get("alt") or "Page image")
         return f"![{clean_alt}]({asset['local_url']})"
 
+    # Trafilatura can preserve poster links as nested markdown; normalize video
+    # targets before replacing image syntax so we never create nested links.
+    def replace_linked_video(match: re.Match[str]) -> str:
+        label, poster_url, target = match.groups()
+        video = next ( (item for item in videos if item.get("url") == target), None )
+        if video is None:
+            return match.group(0)
+        poster = asset_by_source.get(poster_url)
+        if poster:
+            represented_assets.add(poster_url)
+            return f"[![{_clean_label(label) or 'Video'}]({poster['local_url']})]({video.get('local_url') or target})"
+        return f"[▶ {_clean_label(label) or 'Video'}]({video.get('local_url') or target})"
+
+    nested_video_re = re.compile(r"\[!\[([^\]]*)\]\(([^)]+)\)\]\(([^)]+)\)")
+    protected: list[str] = []
+    def protect_linked(match: re.Match[str]) -> str:
+        result = replace_linked_video(match)
+        if result == match.group(0):
+            return result
+        protected.append(result)
+        return f"%%VIDEO_LINK_{len(protected)-1}%%"
+    content = nested_video_re.sub(protect_linked, content)
     rewritten = _MARKDOWN_IMAGE_RE.sub(replace_image, content)
+    for index, fragment in enumerate(protected):
+        rewritten = rewritten.replace(f"%%VIDEO_LINK_{index}%%", fragment)
+    # Direct links may not be represented by an image placeholder.
+    for video in videos:
+        if video.get("local_url"):
+            rewritten = rewritten.replace(f"]({video['url']})", f"]({video['local_url']})")
     hero_lines = [
         f"![{_clean_label(asset.get('alt')) or 'Hero image'}]({asset['local_url']})"
         for asset in assets
@@ -885,12 +956,14 @@ class WebResourceStore:
         *,
         fetch_max_bytes: int = 25 * 1024 * 1024,
         document_max_bytes: int = 100 * 1024 * 1024,
+        video_max_bytes: int = 80 * 1024 * 1024,
         max_redirects: int = 10,
         github_token: str = "",
     ):
         self.library_root = library_root.resolve()
         self.fetch_max_bytes = fetch_max_bytes
         self.document_max_bytes = document_max_bytes
+        self.video_max_bytes = video_max_bytes
         self.max_redirects = max_redirects
         self.github_token = github_token.strip()
         self.web_root = self.library_root / WEB_ROOT_NAME
@@ -1120,6 +1193,25 @@ class WebResourceStore:
                 continue
         return downloaded
 
+    def _download_videos(self, videos: list[dict[str, str]], *, snapshot_path: Path) -> None:
+        for video in videos:
+            url = video["url"]
+            suffix = Path(urlsplit(url).path).suffix.casefold()
+            if suffix not in {".mp4", ".webm", ".mov"}:
+                continue
+            try:
+                response = fetch_public_url(url, accept="video/*,*/*;q=0.1", max_bytes=self.video_max_bytes, max_redirects=self.max_redirects)
+                if not (response.content_type.startswith("video/") or response.content_type == "application/octet-stream"):
+                    raise WebExtractionError(f"Expected video, received {response.content_type}")
+                path = self._asset_dir_for(snapshot_path) / (hashlib.sha256(url.encode()).hexdigest()[:16] + suffix)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                temp = path.with_name(f".{path.name}.tmp")
+                temp.write_bytes(response.body)
+                temp.replace(path)
+                video["local_url"] = self._local_url(path)
+            except Exception as exc:
+                video["download_error"] = str(exc)
+
     def _second_hop_candidates(
         self,
         first_hop: list[dict[str, str]],
@@ -1316,6 +1408,7 @@ class WebResourceStore:
                 references = extract_rich_references(html_text, base_url=final_url or target.canonical_url)
                 assets = self._download_assets(references["images"], snapshot_path=path)
                 videos = references["videos"]
+                self._download_videos(videos, snapshot_path=path)
                 first_hop = list(references["candidates"])
                 seen_candidate_urls = {candidate["url"] for candidate in first_hop}
                 for video in videos:

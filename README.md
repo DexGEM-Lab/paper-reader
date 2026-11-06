@@ -31,6 +31,7 @@
 - `PAPER_READER_MAX_UPLOAD_BYTES=104857600`（默认 100 MiB）
 - `PAPER_READER_FETCH_MAX_BYTES=104857600`（PDF/文档远程下载上限，默认 100 MiB）
 - `PAPER_READER_PAGE_FETCH_MAX_BYTES=26214400`（网页快照抓取上限，默认 25 MiB）
+- `PAPER_READER_VIDEO_MAX_BYTES=83886080`（单个视频下载上限，默认 80 MiB；下载失败时保留远程视频链接）
 - `PAPER_READER_FETCH_MAX_REDIRECTS=10`（远程抓取允许的重定向跳数，默认 10）
 - `PAPER_READER_GITHUB_TOKEN=`（可选的只读 GitHub PAT；未设置时 GitHub API 匿名额度为 60 次/小时）
 - `PAPER_READER_SCREEN_IMPORTS=true`（默认开启：普通网页抓取后用 cheap model 语义筛选；arXiv/OpenReview/直链 PDF 跳过）

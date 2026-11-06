@@ -26,6 +26,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Enrich existing web snapshots with local media and attachments.")
     parser.add_argument("--library-root", type=Path, help="Override PAPER_READER_LIBRARY_DIR")
     parser.add_argument("--limit", type=int, help="Maximum number of pending web items to process")
+    parser.add_argument("--rel-path", action="append", help="Select exact web item path; with --reextract refresh even current versions")
     parser.add_argument("--qps", type=float, default=0.2, help="Maximum item processing rate (default: 0.2)")
     parser.add_argument("--model", help="Attachment judge model (default: PAPER_READER_LLM_CHEAP_MODEL)")
     parser.add_argument(
@@ -44,6 +45,7 @@ def enrich_web_items(
     limit: int | None,
     qps: float,
     reextract: bool = False,
+    rel_paths: list[str] | None = None,
     sleep_fn: Callable[[float], None] = time.sleep,
 ) -> dict[str, int]:
     if limit is not None and limit < 1:
@@ -52,6 +54,12 @@ def enrich_web_items(
         raise ValueError("--qps must be positive")
 
     records = [record for record in app.library.scan(include_done=True).papers if record.resource_kind != "paper"]
+    if rel_paths:
+        selected = set(rel_paths)
+        records = [record for record in records if record.rel_path in selected]
+        missing = selected - {record.rel_path for record in records}
+        if missing:
+            raise ValueError(f"Unknown web item paths: {sorted(missing)}")
     stats = {"scanned": len(records), "processed": 0, "skipped": 0, "failed": 0, "attachments": 0}
     interval = 1.0 / qps
     for record in records:
@@ -61,7 +69,7 @@ def enrich_web_items(
                 current_reader_version = int(metadata.get("reader_mode_version") or 0)
             except (TypeError, ValueError):
                 current_reader_version = 0
-            if current_reader_version >= READER_MODE_VERSION:
+            if not rel_paths and current_reader_version >= READER_MODE_VERSION:
                 stats["skipped"] += 1
                 continue
         elif app.library.web_resources.is_enriched(record.rel_path):
@@ -160,6 +168,7 @@ def main(argv: list[str] | None = None) -> int:
             limit=args.limit,
             qps=args.qps,
             reextract=args.reextract,
+            rel_paths=args.rel_path,
         )
         print(json.dumps({"summary": stats}, ensure_ascii=False, sort_keys=True))
         return 1 if stats["failed"] else 0

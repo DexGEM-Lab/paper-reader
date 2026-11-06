@@ -1388,7 +1388,13 @@ main {
   background: transparent;
 }
 
-.markdown-viewer img {
+.markdown-viewer video {
+  max-width: 100%;
+  height: auto;
+}
+
+.markdown-viewer img,
+.markdown-viewer video {
   border: var(--border-strong);
   border-radius: 0;
 }

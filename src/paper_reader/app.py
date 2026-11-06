@@ -422,6 +422,7 @@ class PaperLibrary:
         *,
         page_fetch_max_bytes: int = 25 * 1024 * 1024,
         document_fetch_max_bytes: int = 100 * 1024 * 1024,
+        video_max_bytes: int = 80 * 1024 * 1024,
         fetch_max_redirects: int = 10,
         github_token: str = "",
     ):
@@ -438,6 +439,7 @@ class PaperLibrary:
             self.root,
             fetch_max_bytes=page_fetch_max_bytes,
             document_max_bytes=document_fetch_max_bytes,
+            video_max_bytes=video_max_bytes,
             max_redirects=fetch_max_redirects,
             github_token=github_token,
         )
@@ -2189,6 +2191,7 @@ def create_app(
         app.team_store,
         page_fetch_max_bytes=runtime_config.fetch_page_max_bytes,
         document_fetch_max_bytes=runtime_config.fetch_max_bytes,
+        video_max_bytes=runtime_config.video_max_bytes,
         fetch_max_redirects=runtime_config.fetch_max_redirects,
         github_token=runtime_config.github_token,
     )

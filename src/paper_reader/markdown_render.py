@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import re
 from urllib.parse import urlsplit
+from html.parser import HTMLParser
 
 
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
@@ -13,6 +14,8 @@ _RULE_RE = re.compile(r"^([-*_])(?:\s*\1){2,}\s*$")
 _BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
 _ITALIC_RE = re.compile(r"(?<!\*)\*(?!\s)(.+?)(?<!\s)\*(?!\*)")
 _STRIKE_RE = re.compile(r"~~(.+?)~~")
+_LINKED_IMAGE_RE = re.compile(r"\[!\[([^\]]*)\]\(([^)]+)\)\]\(([^)]+)\)")
+_VIDEO_TAG_RE = re.compile(r"</?(?:video|source)\b[^>]*>", re.IGNORECASE)
 _LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
 _IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
 _CODE_FENCE_RE = re.compile(r"^(`{3,}|~{3,})(.*)$")
@@ -391,6 +394,24 @@ def _protect_inline_segments(text: str, store: callable) -> str:
                 parts.append(store(_render_inline_code(inner)))
                 index = span_end + tick_count
                 continue
+        linked = _LINKED_IMAGE_RE.match(text, index)
+        if linked:
+            alt, src, href = linked.groups()
+            if _is_video(href):
+                fragment = _render_video(href)
+            else:
+                image = _render_image(alt, src)
+                fragment = _render_link(alt, href, body=image)
+            parts.append(store(fragment))
+            index = linked.end()
+            continue
+        tag_match = _VIDEO_TAG_RE.match(text, index)
+        if tag_match:
+            fragment = _safe_video_tag(tag_match.group())
+            if fragment:
+                parts.append(store(fragment))
+                index = tag_match.end()
+                continue
         image_match = _IMAGE_RE.match(text, index)
         if image_match:
             parts.append(store(_render_image(image_match.group(1), image_match.group(2))))
@@ -426,20 +447,85 @@ def _render_inline_math(content: str) -> str:
     return html.escape(content)
 
 
+def _valid_media_url(value: str) -> bool:
+    try:
+        parsed = urlsplit(value)
+        return (parsed.scheme.casefold() in {"http", "https"} and bool(parsed.hostname)) or (not parsed.scheme and not parsed.netloc and parsed.path.startswith("/files/"))
+    except ValueError:
+        return False
+
+
+def _is_video(value: str) -> bool:
+    try:
+        return _valid_media_url(value.strip()) and urlsplit(value.strip()).path.casefold().endswith((".mp4", ".webm", ".mov"))
+    except ValueError:
+        return False
+
+
+def _render_video(src: str) -> str:
+    src = src.strip()
+    if not _valid_media_url(src):
+        return html.escape(src)
+    referrer = ' referrerpolicy="no-referrer"' if urlsplit(src).scheme else ""
+    return f'<video controls preload="metadata" src="{html.escape(src, quote=True)}"{referrer}></video>'
+
+
+class _VideoTagParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.result = ""
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "video":
+            self.result = "</video>"
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag not in {"video", "source"}:
+            return
+        values = dict(attrs)
+        src = values.get("src") or ""
+        if src and not _valid_media_url(src):
+            return
+        parts = []
+        if src:
+            parts.append(f'src="{html.escape(src, quote=True)}"')
+        if tag == "video" and "controls" in values:
+            parts.append("controls")
+        if values.get("preload") in {"none", "metadata", "auto"}:
+            parts.append(f'preload="{values["preload"]}"')
+        if (src and urlsplit(src).scheme) or values.get("referrerpolicy") == "no-referrer":
+            parts.append('referrerpolicy="no-referrer"')
+        self.result = f'<{tag}' + (" " + " ".join(parts) if parts else "") + ">"
+
+    handle_startendtag = handle_starttag
+
+
+def _safe_video_tag(value: str) -> str:
+    parser = _VideoTagParser()
+    parser.feed(value)
+    return parser.result
+
+
 def _render_image(alt: str, src: str) -> str:
+    if _is_video(src):
+        return _render_video(src)
+    if not _valid_media_url(src.strip()):
+        return html.escape(alt)
     safe_alt = html.escape(alt.strip(), quote=True)
     safe_src = html.escape(src.strip(), quote=True)
     return f'<img src="{safe_src}" alt="{safe_alt}" loading="lazy">'
 
 
-def _render_link(label: str, href: str) -> str:
-    safe_label = html.escape(label)
+def _render_link(label: str, href: str, *, body: str | None = None) -> str:
+    if _is_video(href):
+        return _render_video(href)
+    safe_label = body if body is not None else html.escape(label)
     candidate = href.strip()
     try:
         scheme = urlsplit(candidate).scheme.casefold()
     except ValueError:
         scheme = ""
-    if scheme not in {"http", "https", "mailto"}:
+    if scheme not in {"http", "https"}:
         return safe_label
     safe_href = html.escape(candidate, quote=True)
     return f'<a href="{safe_href}" target="_blank" rel="noreferrer">{safe_label}</a>'

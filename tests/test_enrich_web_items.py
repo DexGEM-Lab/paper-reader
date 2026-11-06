@@ -76,7 +76,7 @@ class BackfillResumeTests(unittest.TestCase):
             fetched: list[tuple[str, bool]] = []
 
             def metadata_for_rel_path(self, rel_path: str):  # noqa: ANN001
-                version = 2 if rel_path.endswith("current.md") else 0
+                version = 3 if rel_path.endswith("current.md") else 0
                 return {"canonical_url": f"https://example.com/{rel_path.split('/')[-1][:-3]}", "resource_kind": "project", "reader_mode_version": version}
 
             def is_enriched(self, rel_path: str) -> bool:
