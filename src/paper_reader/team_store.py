@@ -200,6 +200,23 @@ class PaperAttachment:
 
 
 @dataclass(frozen=True, slots=True)
+class CollectionRecord:
+    id: int
+    owner_type: str
+    user_id: int | None
+    created_by_user_id: int
+    name: str
+    slug: str
+    position: int
+    is_default: bool
+    item_count: int
+    unavailable_count: int
+    can_manage: bool
+    digest_markdown: str | None
+    digest_generated_at: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class DiscoveryRecord:
     id: int
     source: str
@@ -466,6 +483,48 @@ class TeamStore:
                     FOREIGN KEY (decided_by) REFERENCES users(id) ON DELETE SET NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS collections (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    owner_type TEXT NOT NULL CHECK(owner_type IN ('user', 'team')),
+                    user_id INTEGER,
+                    created_by_user_id INTEGER NOT NULL,
+                    name TEXT NOT NULL,
+                    slug TEXT NOT NULL,
+                    position INTEGER NOT NULL DEFAULT 0,
+                    is_default INTEGER NOT NULL DEFAULT 0,
+                    digest_markdown TEXT,
+                    digest_generated_at TEXT,
+                    digest_item_count INTEGER,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(owner_type, user_id, slug),
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    CHECK((owner_type = 'user' AND user_id IS NOT NULL) OR (owner_type = 'team' AND user_id IS NULL))
+                );
+
+                CREATE TABLE IF NOT EXISTS collection_items (
+                    collection_id INTEGER NOT NULL,
+                    paper_id INTEGER NOT NULL,
+                    added_by_user_id INTEGER,
+                    added_at TEXT NOT NULL,
+                    PRIMARY KEY (collection_id, paper_id),
+                    FOREIGN KEY (collection_id) REFERENCES collections(id) ON DELETE CASCADE,
+                    FOREIGN KEY (paper_id) REFERENCES papers(id) ON DELETE CASCADE,
+                    FOREIGN KEY (added_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS collection_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    collection_id INTEGER,
+                    paper_id INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (collection_id) REFERENCES collections(id) ON DELETE SET NULL,
+                    FOREIGN KEY (paper_id) REFERENCES papers(id) ON DELETE CASCADE
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_papers_sort_date ON papers(sort_date);
                 CREATE INDEX IF NOT EXISTS idx_papers_display_title ON papers(display_title);
                 CREATE INDEX IF NOT EXISTS idx_papers_folder ON papers(folder);
@@ -483,13 +542,46 @@ class TeamStore:
                 CREATE INDEX IF NOT EXISTS idx_chat_messages_thread_id ON chat_messages(thread_id);
                 CREATE INDEX IF NOT EXISTS idx_discoveries_surfaced_at ON discoveries(surfaced_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_discoveries_url ON discoveries(url);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_collections_one_default
+                    ON collections(user_id) WHERE owner_type = 'user' AND is_default = 1;
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_collections_team_slug
+                    ON collections(slug) WHERE owner_type = 'team';
+                CREATE INDEX IF NOT EXISTS idx_collections_user_position
+                    ON collections(user_id, position) WHERE owner_type = 'user';
+                CREATE INDEX IF NOT EXISTS idx_collections_team_position
+                    ON collections(position) WHERE owner_type = 'team';
+                CREATE INDEX IF NOT EXISTS idx_collection_items_paper ON collection_items(paper_id);
+                CREATE INDEX IF NOT EXISTS idx_collection_items_added_at ON collection_items(collection_id, added_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_collection_events_retrieval
+                    ON collection_events(collection_id, paper_id, created_at);
                 """
             )
+            self._ensure_collection_columns(conn)
             self._ensure_users_avatar_column(conn)
             self._ensure_papers_date_columns(conn)
             self._ensure_papers_resource_columns(conn)
             self._ensure_paper_sources_columns(conn)
             self._seed_roles(conn)
+
+    def _ensure_collection_columns(self, conn: sqlite3.Connection) -> None:
+        """Keep collection migrations additive for databases created by prerelease builds."""
+        collection_columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(collections)").fetchall()}
+        definitions = {
+            "created_by_user_id": "INTEGER",
+            "digest_markdown": "TEXT",
+            "digest_generated_at": "TEXT",
+            "digest_item_count": "INTEGER",
+        }
+        for name, definition in definitions.items():
+            if name not in collection_columns:
+                conn.execute(f"ALTER TABLE collections ADD COLUMN {name} {definition}")
+        if "created_by_user_id" in collection_columns or "created_by_user_id" in definitions:
+            conn.execute(
+                "UPDATE collections SET created_by_user_id = user_id WHERE created_by_user_id IS NULL AND user_id IS NOT NULL"
+            )
+        item_columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(collection_items)").fetchall()}
+        if "added_by_user_id" not in item_columns:
+            conn.execute("ALTER TABLE collection_items ADD COLUMN added_by_user_id INTEGER")
 
     def _seed_roles(self, conn: sqlite3.Connection) -> None:
         conn.executemany(
@@ -1333,16 +1425,480 @@ class TeamStore:
             for row in rows
         ]
 
+    def _clean_collection_name(self, name: str) -> str:
+        cleaned = re.sub(r"\s+", " ", name.replace("\r", " ").replace("\n", " ")).strip()[:40]
+        if not cleaned:
+            raise ValueError("收藏夹名称不能为空。")
+        return cleaned
+
+    def _collection_slug_base(self, name: str) -> str:
+        slug = re.sub(r"[^\w]+", "-", name.casefold(), flags=re.UNICODE).strip("-_")[:80]
+        return slug or "collection"
+
+    def _next_collection_slug_locked(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        owner_type: str,
+        user_id: int | None,
+        name: str,
+        exclude_id: int | None = None,
+    ) -> str:
+        base = self._collection_slug_base(name)
+        candidate = base
+        suffix = 2
+        while True:
+            query = "SELECT id FROM collections WHERE owner_type = ? AND slug = ?"
+            params: list[Any] = [owner_type, candidate]
+            if owner_type == "user":
+                query += " AND user_id = ?"
+                params.append(user_id)
+            if exclude_id is not None:
+                query += " AND id != ?"
+                params.append(exclude_id)
+            if conn.execute(query, params).fetchone() is None:
+                return candidate
+            candidate = f"{base[: max(1, 78 - len(str(suffix)))]}-{suffix}"
+            suffix += 1
+
+    def _collection_row_locked(self, conn: sqlite3.Connection, collection_id: int) -> sqlite3.Row:
+        row = conn.execute("SELECT * FROM collections WHERE id = ?", (collection_id,)).fetchone()
+        if row is None:
+            raise FileNotFoundError(collection_id)
+        return row
+
+    def _collection_access_locked(
+        self,
+        conn: sqlite3.Connection,
+        collection_id: int,
+        user_id: int,
+        *,
+        manage: bool = False,
+        is_admin: bool = False,
+    ) -> sqlite3.Row:
+        row = self._collection_row_locked(conn, collection_id)
+        owner_type = str(row["owner_type"])
+        if owner_type == "user":
+            allowed = row["user_id"] is not None and int(row["user_id"]) == user_id
+        elif manage:
+            allowed = is_admin or (row["created_by_user_id"] is not None and int(row["created_by_user_id"]) == user_id)
+        else:
+            allowed = True
+        if not allowed:
+            raise PermissionError("无权操作这个收藏夹。")
+        return row
+
+    def ensure_default_collection(self, user_id: int) -> int:
+        with self._write_lock:
+            with self._connect() as conn:
+                return self._ensure_default_collection_locked(conn, user_id)
+
+    def _ensure_default_collection_locked(self, conn: sqlite3.Connection, user_id: int) -> int:
+        existing = conn.execute(
+            "SELECT id FROM collections WHERE owner_type = 'user' AND user_id = ? AND is_default = 1",
+            (user_id,),
+        ).fetchone()
+        if existing is not None:
+            return int(existing["id"])
+        now = self._timestamp()
+        slug = self._next_collection_slug_locked(
+            conn, owner_type="user", user_id=user_id, name="稍后读"
+        )
+        cursor = conn.execute(
+            """
+            INSERT INTO collections(
+                owner_type, user_id, created_by_user_id, name, slug, position,
+                is_default, created_at, updated_at
+            ) VALUES ('user', ?, ?, '稍后读', ?, 0, 1, ?, ?)
+            """,
+            (user_id, user_id, slug, now, now),
+        )
+        if cursor.lastrowid is None:
+            raise RuntimeError("Failed to create default collection.")
+        return int(cursor.lastrowid)
+
+    def create_collection(self, *, owner_type: str, user_id: int, name: str) -> int:
+        if owner_type not in {"user", "team"}:
+            raise ValueError("收藏夹归属必须是 user 或 team。")
+        cleaned = self._clean_collection_name(name)
+        with self._write_lock:
+            with self._connect() as conn:
+                if owner_type == "user":
+                    named_count = int(
+                        conn.execute(
+                            "SELECT COUNT(*) FROM collections WHERE owner_type = 'user' AND user_id = ? AND is_default = 0",
+                            (user_id,),
+                        ).fetchone()[0]
+                    )
+                    if named_count >= 50:
+                        raise ValueError("每位用户最多创建 50 个命名收藏夹。")
+                    max_position = int(
+                        conn.execute(
+                            "SELECT COALESCE(MAX(position), 0) FROM collections WHERE owner_type = 'user' AND user_id = ?",
+                            (user_id,),
+                        ).fetchone()[0]
+                    )
+                    owner_user_id: int | None = user_id
+                else:
+                    created_count = int(
+                        conn.execute(
+                            "SELECT COUNT(*) FROM collections WHERE owner_type = 'team' AND created_by_user_id = ?",
+                            (user_id,),
+                        ).fetchone()[0]
+                    )
+                    if created_count >= 50:
+                        raise ValueError("每位用户最多创建 50 个团队收藏夹。")
+                    max_position = int(
+                        conn.execute(
+                            "SELECT COALESCE(MAX(position), 0) FROM collections WHERE owner_type = 'team'"
+                        ).fetchone()[0]
+                    )
+                    owner_user_id = None
+                slug = self._next_collection_slug_locked(
+                    conn, owner_type=owner_type, user_id=owner_user_id, name=cleaned
+                )
+                now = self._timestamp()
+                cursor = conn.execute(
+                    """
+                    INSERT INTO collections(
+                        owner_type, user_id, created_by_user_id, name, slug, position,
+                        is_default, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)
+                    """,
+                    (owner_type, owner_user_id, user_id, cleaned, slug, max_position + 1, now, now),
+                )
+                if cursor.lastrowid is None:
+                    raise RuntimeError("Failed to create collection.")
+                return int(cursor.lastrowid)
+
+    def rename_collection(
+        self, collection_id: int, *, user_id: int, name: str, is_admin: bool = False
+    ) -> None:
+        cleaned = self._clean_collection_name(name)
+        with self._write_lock:
+            with self._connect() as conn:
+                row = self._collection_access_locked(
+                    conn, collection_id, user_id, manage=True, is_admin=is_admin
+                )
+                owner_user_id = int(row["user_id"]) if row["user_id"] is not None else None
+                slug = self._next_collection_slug_locked(
+                    conn,
+                    owner_type=str(row["owner_type"]),
+                    user_id=owner_user_id,
+                    name=cleaned,
+                    exclude_id=collection_id,
+                )
+                conn.execute(
+                    "UPDATE collections SET name = ?, slug = ?, updated_at = ? WHERE id = ?",
+                    (cleaned, slug, self._timestamp(), collection_id),
+                )
+
+    def reorder_collection(
+        self, collection_id: int, *, user_id: int, direction: str, is_admin: bool = False
+    ) -> None:
+        if direction not in {"up", "down"}:
+            raise ValueError("排序方向必须是 up 或 down。")
+        with self._write_lock:
+            with self._connect() as conn:
+                row = self._collection_access_locked(
+                    conn, collection_id, user_id, manage=True, is_admin=is_admin
+                )
+                owner_type = str(row["owner_type"])
+                position = int(row["position"])
+                comparator, ordering = ("<", "DESC") if direction == "up" else (">", "ASC")
+                scope = "owner_type = ?"
+                params: list[Any] = [owner_type]
+                if owner_type == "user":
+                    scope += " AND user_id = ?"
+                    params.append(int(row["user_id"]))
+                neighbor = conn.execute(
+                    f"SELECT id, position FROM collections WHERE {scope} AND position {comparator} ? ORDER BY position {ordering}, id {ordering} LIMIT 1",
+                    (*params, position),
+                ).fetchone()
+                if neighbor is None:
+                    return
+                conn.execute(
+                    "UPDATE collections SET position = ?, updated_at = ? WHERE id = ?",
+                    (int(neighbor["position"]), self._timestamp(), collection_id),
+                )
+                conn.execute(
+                    "UPDATE collections SET position = ?, updated_at = ? WHERE id = ?",
+                    (position, self._timestamp(), int(neighbor["id"])),
+                )
+
+    def delete_collection(
+        self, collection_id: int, *, user_id: int, is_admin: bool = False
+    ) -> None:
+        with self._write_lock:
+            with self._connect() as conn:
+                row = self._collection_access_locked(
+                    conn, collection_id, user_id, manage=True, is_admin=is_admin
+                )
+                if bool(row["is_default"]):
+                    raise ValueError("默认收藏夹不能删除。")
+                conn.execute("DELETE FROM collections WHERE id = ?", (collection_id,))
+
+    def _collection_record_from_row(
+        self,
+        row: Any,
+        *,
+        user_id: int,
+        is_admin: bool,
+        scanned_rel_paths: set[str] | None,
+    ) -> CollectionRecord:
+        available = int(row["available_count"] if scanned_rel_paths is not None else row["raw_count"])
+        raw_count = int(row["raw_count"])
+        owner_type = str(row["owner_type"])
+        can_manage = (
+            int(row["user_id"]) == user_id
+            if owner_type == "user" and row["user_id"] is not None
+            else is_admin or (row["created_by_user_id"] is not None and int(row["created_by_user_id"]) == user_id)
+        )
+        return CollectionRecord(
+            id=int(row["id"]),
+            owner_type=owner_type,
+            user_id=(int(row["user_id"]) if row["user_id"] is not None else None),
+            created_by_user_id=int(row["created_by_user_id"]),
+            name=str(row["name"]),
+            slug=str(row["slug"]),
+            position=int(row["position"]),
+            is_default=bool(row["is_default"]),
+            item_count=available,
+            unavailable_count=max(0, raw_count - available),
+            can_manage=can_manage,
+            digest_markdown=(str(row["digest_markdown"]) if row["digest_markdown"] else None),
+            digest_generated_at=(str(row["digest_generated_at"]) if row["digest_generated_at"] else None),
+        )
+
+    def list_collections_for_user(
+        self, user_id: int, *, scanned_rel_paths: set[str] | None = None
+    ) -> dict[str, list[CollectionRecord]]:
+        is_admin = self.is_admin(user_id)
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT c.*,
+                       COUNT(ci.paper_id) AS raw_count
+                FROM collections c
+                LEFT JOIN collection_items ci ON ci.collection_id = c.id
+                WHERE (c.owner_type = 'user' AND c.user_id = ?) OR c.owner_type = 'team'
+                GROUP BY c.id
+                ORDER BY c.owner_type, c.position, c.id
+                """,
+                (user_id,),
+            ).fetchall()
+            available_counts: dict[int, int] = {}
+            if scanned_rel_paths is not None and scanned_rel_paths:
+                paths = sorted(scanned_rel_paths)
+                for start in range(0, len(paths), 800):
+                    chunk = paths[start : start + 800]
+                    placeholders = ",".join("?" for _ in chunk)
+                    for count_row in conn.execute(
+                        f"""
+                        SELECT ci.collection_id, COUNT(*) AS available_count
+                        FROM collection_items ci JOIN papers p ON p.id = ci.paper_id
+                        WHERE p.rel_path IN ({placeholders})
+                        GROUP BY ci.collection_id
+                        """,
+                        chunk,
+                    ).fetchall():
+                        cid = int(count_row["collection_id"])
+                        available_counts[cid] = available_counts.get(cid, 0) + int(count_row["available_count"])
+        patched_rows: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["available_count"] = available_counts.get(int(row["id"]), 0)
+            patched_rows.append(item)
+        records = [
+            self._collection_record_from_row(
+                item, user_id=user_id, is_admin=is_admin, scanned_rel_paths=scanned_rel_paths
+            )
+            for item in patched_rows
+        ]
+        personal = sorted(
+            (item for item in records if item.owner_type == "user"),
+            key=lambda item: (0 if item.is_default else 1, item.position, item.id),
+        )
+        team = sorted(
+            (item for item in records if item.owner_type == "team"),
+            key=lambda item: (item.position, item.id),
+        )
+        return {"personal": personal, "team": team}
+
+    def collection_for_user(self, collection_id: int, user_id: int) -> CollectionRecord:
+        groups = self.list_collections_for_user(user_id)
+        for item in [*groups["personal"], *groups["team"]]:
+            if item.id == collection_id:
+                return item
+        raise PermissionError("无权查看这个收藏夹。")
+
+    def set_collection_membership(
+        self,
+        *,
+        collection_id: int,
+        rel_path: str,
+        user_id: int,
+        present: bool,
+    ) -> bool:
+        with self._write_lock:
+            with self._connect() as conn:
+                self._collection_access_locked(conn, collection_id, user_id)
+                paper_id = self._paper_id_for_rel_path_locked(conn, rel_path)
+                if paper_id is None:
+                    raise FileNotFoundError(rel_path)
+                if present:
+                    conn.execute(
+                        """
+                        INSERT OR IGNORE INTO collection_items(
+                            collection_id, paper_id, added_by_user_id, added_at
+                        ) VALUES (?, ?, ?, ?)
+                        """,
+                        (collection_id, paper_id, user_id, self._timestamp()),
+                    )
+                else:
+                    conn.execute(
+                        "DELETE FROM collection_items WHERE collection_id = ? AND paper_id = ?",
+                        (collection_id, paper_id),
+                    )
+                exists = conn.execute(
+                    "SELECT 1 FROM collection_items WHERE collection_id = ? AND paper_id = ?",
+                    (collection_id, paper_id),
+                ).fetchone()
+                return exists is not None
+
+    def toggle_collection_item(
+        self, *, collection_id: int, rel_path: str, user_id: int
+    ) -> bool:
+        with self._connect() as conn:
+            self._collection_access_locked(conn, collection_id, user_id)
+            paper_id = self._paper_id_for_rel_path_locked(conn, rel_path)
+            if paper_id is None:
+                raise FileNotFoundError(rel_path)
+            exists = conn.execute(
+                "SELECT 1 FROM collection_items WHERE collection_id = ? AND paper_id = ?",
+                (collection_id, paper_id),
+            ).fetchone()
+        return self.set_collection_membership(
+            collection_id=collection_id, rel_path=rel_path, user_id=user_id, present=(exists is None)
+        )
+
+    def toggle_default_collection_item(self, *, rel_path: str, user_id: int) -> tuple[int, bool]:
+        collection_id = self.ensure_default_collection(user_id)
+        return collection_id, self.toggle_collection_item(
+            collection_id=collection_id, rel_path=rel_path, user_id=user_id
+        )
+
+    def collection_memberships_for_paper(
+        self, *, rel_path: str, user_id: int
+    ) -> list[CollectionRecord]:
+        groups = self.list_collections_for_user(user_id)
+        accessible = [*groups["personal"], *groups["team"]]
+        if not accessible:
+            return []
+        by_id = {item.id: item for item in accessible}
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT c.id
+                FROM collection_items ci
+                JOIN collections c ON c.id = ci.collection_id
+                JOIN papers p ON p.id = ci.paper_id
+                WHERE p.rel_path = ? AND ((c.owner_type = 'user' AND c.user_id = ?) OR c.owner_type = 'team')
+                ORDER BY c.owner_type, c.position, c.id
+                """,
+                (rel_path, user_id),
+            ).fetchall()
+        return [by_id[int(row["id"])] for row in rows if int(row["id"]) in by_id]
+
+    def collection_items_for_user(
+        self,
+        collection: int | str,
+        *,
+        user_id: int,
+        scanned_rel_paths: set[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            if collection == "all":
+                rows = conn.execute(
+                    """
+                    SELECT p.rel_path, MAX(ci.added_at) AS added_at
+                    FROM collection_items ci
+                    JOIN collections c ON c.id = ci.collection_id
+                    JOIN papers p ON p.id = ci.paper_id
+                    WHERE (c.owner_type = 'user' AND c.user_id = ?) OR c.owner_type = 'team'
+                    GROUP BY p.id
+                    ORDER BY added_at DESC, p.id DESC
+                    """,
+                    (user_id,),
+                ).fetchall()
+            else:
+                collection_id = int(collection)
+                self._collection_access_locked(conn, collection_id, user_id)
+                rows = conn.execute(
+                    """
+                    SELECT p.rel_path, ci.added_at
+                    FROM collection_items ci JOIN papers p ON p.id = ci.paper_id
+                    WHERE ci.collection_id = ?
+                    ORDER BY ci.added_at DESC, p.id DESC
+                    """,
+                    (collection_id,),
+                ).fetchall()
+        result = [
+            {"rel_path": str(row["rel_path"]), "added_at": str(row["added_at"])}
+            for row in rows
+            if scanned_rel_paths is None or str(row["rel_path"]) in scanned_rel_paths
+        ]
+        return result
+
+    def save_collection_digest(
+        self, collection_id: int, *, user_id: int, markdown: str, item_count: int, is_admin: bool = False
+    ) -> None:
+        with self._write_lock:
+            with self._connect() as conn:
+                self._collection_access_locked(
+                    conn, collection_id, user_id, manage=True, is_admin=is_admin
+                )
+                now = self._timestamp()
+                conn.execute(
+                    """
+                    UPDATE collections
+                    SET digest_markdown = ?, digest_generated_at = ?, digest_item_count = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (markdown.strip(), now, item_count, now, collection_id),
+                )
+
+    def record_collection_event(
+        self, *, user_id: int, collection_id: int | None, rel_path: str
+    ) -> None:
+        with self._write_lock:
+            with self._connect() as conn:
+                if collection_id is not None:
+                    self._collection_access_locked(conn, collection_id, user_id)
+                paper_id = self._paper_id_for_rel_path_locked(conn, rel_path)
+                if paper_id is None:
+                    return
+                conn.execute(
+                    """
+                    INSERT INTO collection_events(user_id, collection_id, paper_id, created_at)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (user_id, collection_id, paper_id, self._timestamp()),
+                )
+
     def library_interest_rows(self, *, limit: int = 240) -> list[dict[str, Any]]:
         """Return the compact, human-curated signals used to describe lab interests."""
         with self._connect() as conn:
             rows = conn.execute(
                 """
                 SELECT p.rel_path, p.display_title, p.resource_kind,
-                       GROUP_CONCAT(DISTINCT t.name) AS tags
+                       GROUP_CONCAT(DISTINCT t.name) AS tags,
+                       COUNT(DISTINCT COALESCE(ci.added_by_user_id, c.user_id, c.created_by_user_id)) AS saver_count
                 FROM papers p
                 LEFT JOIN paper_tags pt ON pt.paper_id = p.id
                 LEFT JOIN tags t ON t.id = pt.tag_id
+                LEFT JOIN collection_items ci ON ci.paper_id = p.id
+                LEFT JOIN collections c ON c.id = ci.collection_id
                 GROUP BY p.id
                 ORDER BY COALESCE(p.sort_date, p.updated_at) DESC, p.id DESC
                 LIMIT ?
@@ -1355,6 +1911,7 @@ class TeamStore:
                 "title": str(row["display_title"]),
                 "kind": str(row["resource_kind"]),
                 "tags": [tag.strip() for tag in str(row["tags"] or "").split(",") if tag.strip()],
+                "saver_count": int(row["saver_count"] or 0),
             }
             for row in rows
         ]
