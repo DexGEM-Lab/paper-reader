@@ -191,8 +191,9 @@
             {% endfor %}
           </select>
           <select name="sort" aria-label="排序" onchange="this.form.submit()">
-            <option value="date_desc" {% if sort_by == 'date_desc' %}selected{% endif %}>最新优先</option>
-            <option value="date_asc" {% if sort_by == 'date_asc' %}selected{% endif %}>最早优先</option>
+            <option value="imported_desc" {% if sort_by == 'imported_desc' %}selected{% endif %}>导入最新</option>
+            <option value="date_desc" {% if sort_by == 'date_desc' %}selected{% endif %}>作品日期最新</option>
+            <option value="date_asc" {% if sort_by == 'date_asc' %}selected{% endif %}>作品日期最早</option>
             <option value="title" {% if sort_by == 'title' %}selected{% endif %}>按标题</option>
           </select>
           <label class="checkbox-line done-toggle-line">
@@ -228,7 +229,7 @@
                               data-rel-path="{{ paper.rel_path }}"
                               data-display-title="{{ paper.display_title|lower }}"
                               data-file-name="{{ paper.file_name|lower }}"
-                              data-sort-date="{{ paper.sort_date or '' }}"
+                              data-sort-date="{{ (paper.imported_at if sort_by == 'imported_desc' else paper.sort_date) or '' }}"
                               data-folder="{{ paper.folder }}"
                               data-done="{{ 1 if paper.is_done else 0 }}"
                               data-year-key="{{ year_group.key }}"
@@ -237,7 +238,9 @@
                             >
                               <span class="paper-row-top">
                                 <span class="paper-row-type">{{ format_resource_kind(paper.resource_kind) }}</span>
-                                {% if paper.extracted_date %}
+                                {% if sort_by == 'imported_desc' and paper.imported_at %}
+                                  <span class="paper-row-date">导入 {{ paper.imported_at[:10] }} UTC</span>
+                                {% elif paper.extracted_date %}
                                   <span class="paper-row-date">{{ paper.extracted_date }}</span>
                                 {% endif %}
                               </span>
@@ -440,6 +443,11 @@
                 <button type="button" class="ghost-button viewer-meta-inline-button" data-paper-date-open>修改</button>
               {% endif %}
             </p>
+          </section>
+
+          <section class="item-details-section">
+            <h3>导入日期</h3>
+            <p class="item-details-line">{{ selected_paper.imported_at[:10] if selected_paper.imported_at else '未知' }}{% if selected_paper.imported_at %} UTC{% endif %}</p>
           </section>
 
           {% if selected_arxiv_markdown_status.available %}
@@ -2337,7 +2345,7 @@
         const rowDate = existingRow.dataset.sortDate || "";
         const rowTitle = existingRow.dataset.displayTitle || "";
         const rowFile = existingRow.dataset.fileName || "";
-        const paperDate = newPaper.sort_date || "";
+        const paperDate = (sortBy === "imported_desc" ? newPaper.imported_at : newPaper.sort_date) || "";
         const paperTitle = (newPaper.display_title || "").toLowerCase();
         const paperFile = (newPaper.file_name || "").toLowerCase();
 
@@ -2362,7 +2370,7 @@
         row.dataset.relPath = paper.rel_path;
         row.dataset.displayTitle = (paper.display_title || "").toLowerCase();
         row.dataset.fileName = (paper.file_name || "").toLowerCase();
-        row.dataset.sortDate = paper.sort_date || "";
+        row.dataset.sortDate = (sortBy === "imported_desc" ? paper.imported_at : paper.sort_date) || "";
         row.dataset.folder = paper.folder || "";
         row.dataset.done = paper.is_done ? "1" : "0";
         row.dataset.yearKey = paper.year_key || "unknown";
@@ -2370,7 +2378,7 @@
         row.innerHTML = `
           <span class="paper-row-top">
             <span class="paper-row-type">${escapeHtml(paper.extension)}</span>
-            ${paper.extracted_date ? `<span class="paper-row-date">${escapeHtml(paper.extracted_date)}</span>` : ""}
+            ${sortBy === "imported_desc" && paper.imported_at ? `<span class="paper-row-date">导入 ${escapeHtml(paper.imported_at.slice(0, 10))} UTC</span>` : paper.extracted_date ? `<span class="paper-row-date">${escapeHtml(paper.extracted_date)}</span>` : ""}
           </span>
           <strong class="paper-row-title">${escapeHtml(paper.display_title)}</strong>
           <span class="paper-row-file">${escapeHtml(paper.file_name)}${paper.folder ? ` · ${escapeHtml(paper.folder)}` : ""}${paper.is_done ? " · 已读" : ""}</span>

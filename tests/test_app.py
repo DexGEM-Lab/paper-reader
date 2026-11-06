@@ -2380,7 +2380,7 @@ class PaperReaderAppTests(unittest.TestCase):
         self.make_pdf(self.library / "2025-paper.pdf", "2025 Paper")
         self.make_docx(self.library / "2024-notes.docx", "2024 Notes", "submitted on 11 Dec 2024")
 
-        response = self.client.get("/")
+        response = self.client.get("/?sort=date_desc")
         html = response.get_data(as_text=True)
 
         self.assertEqual(response.status_code, 200)
@@ -2388,6 +2388,31 @@ class PaperReaderAppTests(unittest.TestCase):
         self.assertIn("2025", html)
         self.assertIn("2024-12", html)
         self.assertIn("含已读", html)
+
+    def test_import_date_defaults_to_first_library_registration(self) -> None:
+        self.make_pdf(self.library / "old.pdf", "Old")
+        self.make_pdf(self.library / "new.pdf", "New")
+        self.client.get("/")  # Register both files in the library database.
+        with self.app.team_store._connect() as conn:
+            conn.execute("UPDATE papers SET created_at = ? WHERE rel_path = ?", ("2025-01-02T08:00:00", "old.pdf"))
+            conn.execute("UPDATE papers SET created_at = ? WHERE rel_path = ?", ("2025-03-04T12:00:00", "new.pdf"))
+        self.app.team_store.add_source(
+            "old.pdf", source_type="feishu", source_value="share-1", message_time_iso="2026-12-01T00:00:00Z"
+        )
+
+        html = self.client.get("/").get_data(as_text=True)
+        sidebar = html[html.index('id="paper-list"'):html.index('</aside>')]
+        self.assertIn('value="imported_desc" selected', html)
+        self.assertLess(sidebar.index('data-rel-path="new.pdf"'), sidebar.index('data-rel-path="old.pdf"'))
+        self.assertIn('data-month-key="2025-03" open', sidebar)
+        self.assertIn('导入 2025-03-04 UTC', sidebar)
+        self.assertIn('导入日期', html)
+        self.assertEqual(self.app.team_store.paper_import_dates()["old.pdf"], "2025-01-02T08:00:00")
+
+        publication_html = self.client.get("/?sort=date_desc").get_data(as_text=True)
+        self.assertIn('value="date_desc" selected', publication_html)
+        self.assertNotIn('导入 2025-03-04 UTC', publication_html)
+        self.assertEqual(self.app.team_store.paper_import_dates()["old.pdf"], "2025-01-02T08:00:00")
 
     def test_done_toggle_marks_current_user_only_and_hides_it_by_default(self) -> None:
         self.make_pdf(self.library / "paper.pdf", "Done Me")

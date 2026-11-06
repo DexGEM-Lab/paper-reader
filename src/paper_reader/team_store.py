@@ -1094,6 +1094,13 @@ class TeamStore:
                     self._apply_date_override_to_paper_locked(conn, paper_id)
                     self._ensure_auto_tags_locked(conn, paper_id, paper)
 
+    def paper_import_dates(self) -> dict[str, str]:
+        """First registration in the library, stored as a UTC timestamp."""
+        with self._connect() as conn:
+            return {str(row["rel_path"]): str(row["created_at"]) for row in conn.execute(
+                "SELECT rel_path, created_at FROM papers"
+            )}
+
     def all_manual_date_overrides(self) -> dict[str, dict[str, str | None]]:
         overrides: dict[str, dict[str, str | None]] = {}
         with self._connect() as conn:

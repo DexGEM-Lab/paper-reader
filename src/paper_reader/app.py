@@ -144,6 +144,7 @@ class PaperRecord:
     fetched_at: str | None = None
     author: str | None = None
     site_name: str | None = None
+    imported_at: str | None = None
 
 
 @dataclass
@@ -1794,11 +1795,12 @@ def build_groups(papers: list[PaperRecord]) -> list[dict[str, Any]]:
     return ordered
 
 
-def build_sidebar_groups(papers: list[PaperRecord], selected_rel_path: str | None = None) -> list[dict[str, Any]]:
+def build_sidebar_groups(papers: list[PaperRecord], selected_rel_path: str | None = None, sort_by: str = "date_desc") -> list[dict[str, Any]]:
     tree: dict[str, dict[str, Any]] = {}
     for paper in papers:
-        year_key = paper.sort_date[:4] if paper.sort_date else "unknown"
-        month_key = paper.sort_date[:7] if paper.sort_date else "unknown"
+        group_date = paper.imported_at if sort_by == "imported_desc" else paper.sort_date
+        year_key = group_date[:4] if group_date else "unknown"
+        month_key = group_date[:7] if group_date else "unknown"
         year_label = year_key if year_key != "unknown" else "未提取日期"
         month_label = month_key if month_key != "unknown" else "未分类"
 
@@ -1825,6 +1827,8 @@ def build_sidebar_groups(papers: list[PaperRecord], selected_rel_path: str | Non
         ]
         if "unknown" in year_group["months"]:
             months.append(year_group["months"]["unknown"])
+        if not groups and not selected_rel_path and months:
+            months[0]["is_open"] = True
         groups.append(
             {
                 "key": year_group["key"],
@@ -1878,6 +1882,8 @@ def filter_and_sort_papers(
         filtered.sort(key=lambda paper: (paper.display_title.lower(), paper.file_name.lower()))
     elif sort_by == "date_asc":
         filtered.sort(key=lambda paper: (paper.sort_date or "9999-99-99", paper.display_title.lower()))
+    elif sort_by == "imported_desc":
+        filtered.sort(key=lambda paper: (paper.imported_at or "", paper.display_title.lower()), reverse=True)
     else:
         filtered.sort(key=lambda paper: (paper.sort_date or "0000-00-00", paper.display_title.lower()), reverse=True)
     return filtered
@@ -2447,7 +2453,7 @@ def create_app(
     def profile_avatar_route() -> Any:
         current_folder = request.form.get("folder", "")
         query = request.form.get("q", "")
-        sort_by = request.form.get("sort", "date_desc")
+        sort_by = request.form.get("sort", "imported_desc")
         show_done = parse_checkbox(request.form.get("show_done"))
         selected_paper = request.form.get("paper", "") or None
         tab = request.form.get("tab", "source")
@@ -2615,8 +2621,9 @@ def create_app(
         active_prompt_count: int,
         show_done: bool,
     ) -> dict[str, Any]:
-        year_key = paper.sort_date[:4] if paper.sort_date else "unknown"
-        month_key = paper.sort_date[:7] if paper.sort_date else "unknown"
+        group_date = paper.imported_at if sort_by == "imported_desc" else paper.sort_date
+        year_key = group_date[:4] if group_date else "unknown"
+        month_key = group_date[:7] if group_date else "unknown"
         paper_url_params: dict[str, Any] = {
             "folder": current_folder,
             "q": query,
@@ -2634,6 +2641,7 @@ def create_app(
             "display_title": paper.display_title,
             "extracted_date": paper.extracted_date,
             "sort_date": paper.sort_date,
+            "imported_at": paper.imported_at,
             "prompt_result_count": paper.prompt_result_count,
             "active_prompt_count": active_prompt_count,
             "is_done": paper.is_done,
@@ -3736,6 +3744,9 @@ def create_app(
     ) -> list[PaperRecord]:
         scan = app.library.scan()  # type: ignore[attr-defined]
         app.team_store.sync_papers(scan.papers)  # type: ignore[attr-defined]
+        import_dates = app.team_store.paper_import_dates()  # type: ignore[attr-defined]
+        for paper in scan.papers:
+            paper.imported_at = import_dates.get(paper.rel_path)
         papers = apply_user_done_state(scan.papers)
         metadata_matches = app.team_store.search_rel_paths(query) if query.strip() else set()  # type: ignore[attr-defined]
         batch_papers = filter_and_sort_papers(
@@ -3753,7 +3764,7 @@ def create_app(
     def current_page_state() -> dict[str, Any]:
         folder = request.args.get("folder", "")
         query = request.args.get("q", "")
-        sort_by = request.args.get("sort", "date_desc")
+        sort_by = request.args.get("sort", "imported_desc")
         show_done = request.args.get("show_done", "").strip().lower() in {"1", "true", "yes", "on"}
         batch_show_done = request.args.get("batch_show_done", "").strip().lower() in {"1", "true", "yes", "on"}
         batch_page = parse_page(request.args.get("batch_page"))
@@ -3768,6 +3779,9 @@ def create_app(
 
         scan = app.library.scan()  # type: ignore[attr-defined]
         app.team_store.sync_papers(scan.papers)  # type: ignore[attr-defined]
+        import_dates = app.team_store.paper_import_dates()  # type: ignore[attr-defined]
+        for paper in scan.papers:
+            paper.imported_at = import_dates.get(paper.rel_path)
         scanned_rel_paths = {paper.rel_path for paper in scan.papers}
         actor_id = current_user_id()
         collection_groups = (
@@ -3844,7 +3858,7 @@ def create_app(
         )
         if not batch_show_done:
             batch_library_papers = [paper for paper in batch_library_papers if not paper.is_done]
-        sidebar_groups = build_sidebar_groups(papers, selected_rel_path)
+        sidebar_groups = build_sidebar_groups(papers, selected_rel_path, sort_by)
 
         selected_paper = next((item for item in papers if item.rel_path == selected_rel_path), None)
         if selected_paper is None and papers:
@@ -4145,7 +4159,7 @@ def create_app(
         return redirect_to_index(
             request.values.get("folder", ""),
             request.values.get("q", ""),
-            request.values.get("sort", "date_desc"),
+            request.values.get("sort", "imported_desc"),
             selected_paper or request.values.get("paper", "") or None,
             request.values.get("tab", "source"),
             show_done=parse_checkbox(request.values.get("show_done")),
@@ -4374,7 +4388,7 @@ def create_app(
         if actor is not None and actor.role != "admin":
             current_folder = target_folder
         query = request.form.get("q", "")
-        sort_by = request.form.get("sort", "date_desc")
+        sort_by = request.form.get("sort", "imported_desc")
         show_done = parse_checkbox(request.form.get("show_done"))
         if not files or not any(file.filename for file in files):
             flash("先选至少一个文件，再开始上传。", "error")
@@ -4411,7 +4425,7 @@ def create_app(
         if actor is not None and actor.role != "admin":
             current_folder = target_folder
         query = request.form.get("q", "")
-        sort_by = request.form.get("sort", "date_desc")
+        sort_by = request.form.get("sort", "imported_desc")
         show_done = parse_checkbox(request.form.get("show_done"))
 
         if file is None or not file.filename:
@@ -4440,7 +4454,7 @@ def create_app(
     def create_folder_route() -> Any:
         current_folder = request.form.get("folder", "")
         query = request.form.get("q", "")
-        sort_by = request.form.get("sort", "date_desc")
+        sort_by = request.form.get("sort", "imported_desc")
         show_done = parse_checkbox(request.form.get("show_done"))
         selected_paper = request.form.get("paper", "") or None
         tab = request.form.get("tab", "source")
@@ -4461,7 +4475,7 @@ def create_app(
     def rename_route() -> Any:
         current_folder = request.form.get("folder", "")
         query = request.form.get("q", "")
-        sort_by = request.form.get("sort", "date_desc")
+        sort_by = request.form.get("sort", "imported_desc")
         show_done = parse_checkbox(request.form.get("show_done"))
         tab = request.form.get("tab", "source")
         rel_path = request.form.get("rel_path", "").strip("/")
@@ -4484,7 +4498,7 @@ def create_app(
     def delete_route() -> Any:
         current_folder = request.form.get("folder", "")
         query = request.form.get("q", "")
-        sort_by = request.form.get("sort", "date_desc")
+        sort_by = request.form.get("sort", "imported_desc")
         show_done = parse_checkbox(request.form.get("show_done"))
         rel_path = request.form.get("rel_path", "").strip("/")
         admin_user = require_admin_user()
@@ -4502,7 +4516,7 @@ def create_app(
     def done_toggle_route() -> Any:
         current_folder = request.form.get("folder", "")
         query = request.form.get("q", "")
-        sort_by = request.form.get("sort", "date_desc")
+        sort_by = request.form.get("sort", "imported_desc")
         show_done = parse_checkbox(request.form.get("show_done"))
         rel_path = request.form.get("rel_path", "").strip("/")
         tab = request.form.get("tab", "source")
@@ -4532,7 +4546,7 @@ def create_app(
     def paper_date_route() -> Any:
         current_folder = request.form.get("folder", "")
         query = request.form.get("q", "")
-        sort_by = request.form.get("sort", "date_desc")
+        sort_by = request.form.get("sort", "imported_desc")
         show_done = parse_checkbox(request.form.get("show_done"))
         rel_path = request.form.get("rel_path", "").strip("/")
         tab = request.form.get("tab", "source")
@@ -4562,7 +4576,7 @@ def create_app(
     def prompt_run_route() -> Any:
         current_folder = request.form.get("folder", "")
         query = request.form.get("q", "")
-        sort_by = request.form.get("sort", "date_desc")
+        sort_by = request.form.get("sort", "imported_desc")
         show_done = parse_checkbox(request.form.get("show_done"))
         rel_path = request.form.get("rel_path", "").strip("/")
         prompt_slug = request.form.get("prompt_slug", "").strip()
@@ -4587,7 +4601,7 @@ def create_app(
     def prompt_save_route() -> Any:
         current_folder = request.form.get("folder", "")
         query = request.form.get("q", "")
-        sort_by = request.form.get("sort", "date_desc")
+        sort_by = request.form.get("sort", "imported_desc")
         show_done = parse_checkbox(request.form.get("show_done"))
         selected_paper = request.form.get("paper", "") or None
         tab = request.form.get("tab", "source")
@@ -4619,7 +4633,7 @@ def create_app(
     def tag_prompt_save_route() -> Any:
         current_folder = request.form.get("folder", "")
         query = request.form.get("q", "")
-        sort_by = request.form.get("sort", "date_desc")
+        sort_by = request.form.get("sort", "imported_desc")
         show_done = parse_checkbox(request.form.get("show_done"))
         selected_paper = request.form.get("paper", "") or None
         tab = request.form.get("tab", "source")
@@ -4645,7 +4659,7 @@ def create_app(
     def tag_generate_ai_route() -> Any:
         current_folder = request.form.get("folder", "")
         query = request.form.get("q", "")
-        sort_by = request.form.get("sort", "date_desc")
+        sort_by = request.form.get("sort", "imported_desc")
         show_done = parse_checkbox(request.form.get("show_done"))
         rel_path = request.form.get("rel_path", "").strip("/")
         tab = request.form.get("tab", "source")
@@ -4664,7 +4678,7 @@ def create_app(
     def prompt_delete_route() -> Any:
         current_folder = request.form.get("folder", "")
         query = request.form.get("q", "")
-        sort_by = request.form.get("sort", "date_desc")
+        sort_by = request.form.get("sort", "imported_desc")
         show_done = parse_checkbox(request.form.get("show_done"))
         selected_paper = request.form.get("paper", "") or None
         tab = request.form.get("tab", "source")
@@ -4686,7 +4700,7 @@ def create_app(
     def team_user_save_route() -> Any:
         current_folder = request.form.get("folder", "")
         query = request.form.get("q", "")
-        sort_by = request.form.get("sort", "date_desc")
+        sort_by = request.form.get("sort", "imported_desc")
         show_done = parse_checkbox(request.form.get("show_done"))
         selected_paper = request.form.get("paper", "") or None
         tab = request.form.get("tab", "source")
@@ -4709,7 +4723,7 @@ def create_app(
     def team_user_update_route() -> Any:
         current_folder = request.form.get("folder", "")
         query = request.form.get("q", "")
-        sort_by = request.form.get("sort", "date_desc")
+        sort_by = request.form.get("sort", "imported_desc")
         show_done = parse_checkbox(request.form.get("show_done"))
         selected_paper = request.form.get("paper", "") or None
         tab = request.form.get("tab", "source")
@@ -4735,7 +4749,7 @@ def create_app(
     def recommend_route() -> Any:
         current_folder = request.form.get("folder", "")
         query = request.form.get("q", "")
-        sort_by = request.form.get("sort", "date_desc")
+        sort_by = request.form.get("sort", "imported_desc")
         show_done = parse_checkbox(request.form.get("show_done"))
         rel_path = request.form.get("rel_path", "").strip("/")
         tab = request.form.get("tab", "source")
@@ -4761,7 +4775,7 @@ def create_app(
     def like_toggle_route() -> Any:
         current_folder = request.form.get("folder", "")
         query = request.form.get("q", "")
-        sort_by = request.form.get("sort", "date_desc")
+        sort_by = request.form.get("sort", "imported_desc")
         show_done = parse_checkbox(request.form.get("show_done"))
         rel_path = request.form.get("rel_path", "").strip("/")
         tab = request.form.get("tab", "source")
@@ -4796,7 +4810,7 @@ def create_app(
     def chat_send_route() -> Any:
         current_folder = request.form.get("folder", "")
         query = request.form.get("q", "")
-        sort_by = request.form.get("sort", "date_desc")
+        sort_by = request.form.get("sort", "imported_desc")
         show_done = parse_checkbox(request.form.get("show_done"))
         rel_path = request.form.get("rel_path", "").strip("/")
         tab = request.form.get("tab", "source")
@@ -5077,7 +5091,7 @@ def create_app(
     def tag_add_route() -> Any:
         current_folder = request.form.get("folder", "")
         query = request.form.get("q", "")
-        sort_by = request.form.get("sort", "date_desc")
+        sort_by = request.form.get("sort", "imported_desc")
         show_done = parse_checkbox(request.form.get("show_done"))
         rel_path = request.form.get("rel_path", "").strip("/")
         tab = request.form.get("tab", "source")
@@ -5104,7 +5118,7 @@ def create_app(
     def tag_remove_route() -> Any:
         current_folder = request.form.get("folder", "")
         query = request.form.get("q", "")
-        sort_by = request.form.get("sort", "date_desc")
+        sort_by = request.form.get("sort", "imported_desc")
         show_done = parse_checkbox(request.form.get("show_done"))
         rel_path = request.form.get("rel_path", "").strip("/")
         tab = request.form.get("tab", "source")
@@ -5125,7 +5139,7 @@ def create_app(
     def import_link_route() -> Any:
         current_folder = request.form.get("folder", "")
         query = request.form.get("q", "")
-        sort_by = request.form.get("sort", "date_desc")
+        sort_by = request.form.get("sort", "imported_desc")
         show_done = parse_checkbox(request.form.get("show_done"))
         target = request.form.get("import_target", "")
         recommendation_reason = request.form.get("recommendation_reason", "")
@@ -5162,7 +5176,7 @@ def create_app(
     def prompt_batch_run_route() -> Any:
         current_folder = request.form.get("folder", "")
         query = request.form.get("q", "")
-        sort_by = request.form.get("sort", "date_desc")
+        sort_by = request.form.get("sort", "imported_desc")
         show_done = parse_checkbox(request.form.get("show_done"))
         batch_show_done = parse_checkbox(request.form.get("batch_show_done"))
         batch_page = parse_page(request.form.get("batch_page"))
@@ -5245,7 +5259,7 @@ def create_app(
     def offline_package_route() -> Any:
         current_folder = request.form.get("folder", "")
         query = request.form.get("q", "")
-        sort_by = request.form.get("sort", "date_desc")
+        sort_by = request.form.get("sort", "imported_desc")
         show_done = parse_checkbox(request.form.get("show_done"))
         selected_paper = request.form.get("paper", "") or None
         tab = request.form.get("tab", "source")
@@ -5544,7 +5558,7 @@ def create_app(
     def ai_summary_route() -> Any:
         current_folder = request.form.get("folder", "")
         query = request.form.get("q", "")
-        sort_by = request.form.get("sort", "date_desc")
+        sort_by = request.form.get("sort", "imported_desc")
         show_done = parse_checkbox(request.form.get("show_done"))
         rel_path = request.form.get("rel_path", "").strip("/")
         prompt = app.prompt_store.get_prompt(DEFAULT_PROMPT_SLUG)  # type: ignore[attr-defined]
@@ -5575,7 +5589,7 @@ def create_app(
     def jobs_config_route() -> Any:
         current_folder = request.form.get("folder", "")
         query = request.form.get("q", "")
-        sort_by = request.form.get("sort", "date_desc")
+        sort_by = request.form.get("sort", "imported_desc")
         show_done = parse_checkbox(request.form.get("show_done"))
         selected_paper = request.form.get("paper", "") or None
         tab = request.form.get("tab", "source")
@@ -5597,7 +5611,7 @@ def create_app(
     def jobs_stop_all_route() -> Any:
         current_folder = request.form.get("folder", "")
         query = request.form.get("q", "")
-        sort_by = request.form.get("sort", "date_desc")
+        sort_by = request.form.get("sort", "imported_desc")
         show_done = parse_checkbox(request.form.get("show_done"))
         selected_paper = request.form.get("paper", "") or None
         tab = request.form.get("tab", "source")
@@ -5628,7 +5642,7 @@ def create_app(
     def reindex() -> Any:
         current_folder = request.form.get("folder", "")
         query = request.form.get("q", "")
-        sort_by = request.form.get("sort", "date_desc")
+        sort_by = request.form.get("sort", "imported_desc")
         show_done = parse_checkbox(request.form.get("show_done"))
         selected_paper = request.form.get("paper", "") or None
         tab = request.form.get("tab", "source")
