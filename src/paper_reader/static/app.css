@@ -2507,6 +2507,16 @@ table {
   border-left-color: var(--sapphire);
 }
 
+/* ISSUE-005: collapsed panes must leave the grid flow entirely. Width-0
+   "hidden" panes stayed in flow and wrapped into a phantom second row that
+   crushed the reader's height (the real cause of content looking cut off). */
+.workspace-shell.left-collapsed .pane-left,
+.workspace-shell.left-collapsed .pane-resizer-left,
+.workspace-shell.right-collapsed .pane-right,
+.workspace-shell.right-collapsed .pane-resizer-right {
+  display: none;
+}
+
 /* ---------------------------------------------------------- evidence drawer */
 
 .pane-right .pane-top h2 {
