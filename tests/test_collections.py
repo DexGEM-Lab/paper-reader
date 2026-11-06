@@ -139,6 +139,26 @@ class CollectionStoreTests(unittest.TestCase):
         )
         self.assertEqual(len(self.store.collection_items_for_user(collection, user_id=self.alice.id)), 2)
 
+    def test_retrieval_metric_counts_only_mature_reopened_memberships(self) -> None:
+        collection = self.store.create_collection(owner_type="user", user_id=self.alice.id, name="Metric")
+        self.store.set_collection_membership(
+            collection_id=collection, rel_path="a.pdf", user_id=self.alice.id, present=True
+        )
+        with self.store._connect() as conn:
+            conn.execute(
+                "UPDATE collection_items SET added_at = '2020-01-01T00:00:00' WHERE collection_id = ?",
+                (collection,),
+            )
+        before = self.store.collection_retrieval_metric(min_age_days=7)
+        self.assertEqual(before["eligible_items"], 1)
+        self.assertEqual(before["retrieved_items"], 0)
+        self.store.record_collection_event(
+            user_id=self.alice.id, collection_id=collection, rel_path="a.pdf"
+        )
+        after = self.store.collection_retrieval_metric(min_age_days=7)
+        self.assertEqual(after["retrieved_items"], 1)
+        self.assertEqual(after["retrieval_rate"], 1.0)
+
     def test_digest_persists_and_distinct_savers_feed_interest_rows(self) -> None:
         personal = self.store.create_collection(owner_type="user", user_id=self.alice.id, name="Mine")
         team = self.store.create_collection(owner_type="team", user_id=self.alice.id, name="Team")

@@ -1886,6 +1886,35 @@ class TeamStore:
                     (user_id, collection_id, paper_id, self._timestamp()),
                 )
 
+    def collection_retrieval_metric(self, *, min_age_days: int = 7) -> dict[str, Any]:
+        """Measure whether mature saved items were reopened from their collection."""
+        cutoff = (datetime.utcnow() - timedelta(days=max(0, min_age_days))).isoformat(timespec="seconds")
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS eligible_items,
+                       SUM(
+                           CASE WHEN EXISTS (
+                               SELECT 1 FROM collection_events ce
+                               WHERE ce.collection_id = ci.collection_id
+                                 AND ce.paper_id = ci.paper_id
+                                 AND ce.created_at >= ci.added_at
+                           ) THEN 1 ELSE 0 END
+                       ) AS retrieved_items
+                FROM collection_items ci
+                WHERE ci.added_at <= ?
+                """,
+                (cutoff,),
+            ).fetchone()
+        eligible = int(row["eligible_items"] or 0)
+        retrieved = int(row["retrieved_items"] or 0)
+        return {
+            "eligible_items": eligible,
+            "retrieved_items": retrieved,
+            "retrieval_rate": (retrieved / eligible if eligible else 0.0),
+            "min_age_days": max(0, min_age_days),
+        }
+
     def library_interest_rows(self, *, limit: int = 240) -> list[dict[str, Any]]:
         """Return the compact, human-curated signals used to describe lab interests."""
         with self._connect() as conn:
