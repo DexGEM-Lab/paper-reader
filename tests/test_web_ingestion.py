@@ -911,3 +911,20 @@ class WebImportIntegrationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TrailingSnapshotRuleTests:
+    def test_trailing_rule_removed(self):
+        from src.paper_reader.markdown_render import strip_trailing_snapshot_rule
+        body = "# Title\n\ncontent line\n\nmore\n\n---\n"
+        assert strip_trailing_snapshot_rule(body) == "# Title\n\ncontent line\n\nmore"
+
+    def test_only_terminal_rule_removed(self):
+        from src.paper_reader.markdown_render import strip_trailing_snapshot_rule
+        body = "# Title\n\n---\n\ncontent\n\n## Section\n\ntext"
+        assert strip_trailing_snapshot_rule(body) == body
+
+    def test_trailing_rule_with_trailing_blanks(self):
+        from src.paper_reader.markdown_render import strip_trailing_snapshot_rule
+        body = "text\n\n---\n\n\n"
+        assert strip_trailing_snapshot_rule(body) == "text"

@@ -104,6 +104,24 @@ def strip_duplicate_snapshot_header(markdown: str, title: str) -> str:
     return stripped
 
 
+def strip_trailing_snapshot_rule(markdown: str) -> str:
+    """Remove a dangling horizontal rule (and surrounding blanks) at the very
+    end of a web snapshot. Extractors that separate page sections with ``---``
+    sometimes leave one as the final line; rendered alone at the bottom of the
+    reading pane it looks like a stray border (ISSUE-017)."""
+    if not markdown:
+        return markdown
+    lines = markdown.splitlines()
+    cursor = len(lines) - 1
+    while cursor >= 0 and not lines[cursor].strip():
+        cursor -= 1
+    if cursor >= 0 and _RULE_RE.match(lines[cursor].strip()):
+        lines = lines[:cursor]
+        while lines and not lines[-1].strip():
+            lines.pop()
+    return "\n".join(lines)
+
+
 def _title_key(value: str) -> str:
     text = re.sub(r"\s+", " ", (value or "")).strip().strip("*_`")
     # ATX headings may carry a closing sequence of '#'s (``# Title #``).

@@ -51,7 +51,7 @@ from .insights_history import HistoricalInsightsStore, extract_digest
 from .llm import get_llm_client, resolve_model
 from .insights_momentum import MomentumInsightsStore
 from .insights_opportunity import OpportunityInsightsStore
-from .markdown_render import render_markdown, strip_duplicate_snapshot_header
+from .markdown_render import render_markdown, strip_duplicate_snapshot_header, strip_trailing_snapshot_rule
 from .netutils import fetch_public_url
 from .offline_package import build_offline_manifest, manifest_json as build_manifest_json, offline_prompt_arcname, offline_source_arcname
 from .prompt_manager import DEFAULT_PROMPT_SLUG, PromptDefinition, PromptStore, parse_checkbox
@@ -3883,6 +3883,7 @@ def create_app(
                             snapshot_markdown,
                             str(web_metadata.get("title") or selected_paper.display_title or ""),
                         )
+                        snapshot_markdown = strip_trailing_snapshot_rule(snapshot_markdown)
                     selected_web_html = Markup(render_markdown(snapshot_markdown))
                     raw_screening = web_metadata.get("screening")
                     if isinstance(raw_screening, dict):
