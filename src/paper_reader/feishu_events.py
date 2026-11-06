@@ -8,6 +8,11 @@ import json
 import logging
 import re
 import sqlite3
+import threading
+import time
+import uuid
+from urllib.request import Request, urlopen
+from urllib.parse import quote
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -150,8 +155,115 @@ def webhook() -> Any:
             if not isinstance(challenge, str):
                 raise ValueError("missing challenge")
             return {"challenge": challenge}
-        process_event(payload, Path(config["LIBRARY_ROOT"]) / ".paper-reader-feishu-events.sqlite3", current_app.action_queue, config["FEISHU_MONITOR_CHAT_IDS"])
+        allowed = config["FEISHU_MONITOR_CHAT_IDS"] | config["FEISHU_FEEDBACK_CHAT_IDS"]
+        process_event(payload, Path(config["LIBRARY_ROOT"]) / ".paper-reader-feishu-events.sqlite3", current_app.action_queue, allowed)
+        enqueue_feedback(payload, current_app.feedback_agent, config["FEISHU_FEEDBACK_CHAT_IDS"])
     except (ValueError, TypeError, KeyError) as exc:
         LOGGER.warning("Rejected Feishu event: %s", exc)
         return {"error": "invalid event"}, 400
     return {"ok": True}
+
+
+class FeishuClient:
+    """Minimal tenant-token client; errors are surfaced for durable retry."""
+    def __init__(self, base: str, app_id: str, app_secret: str):
+        self.base, self.app_id, self.app_secret = base.rstrip('/'), app_id, app_secret
+        self._token, self._expires = '', 0.0
+        self._lock = threading.Lock()
+
+    def _request(self, path: str, body: dict | None = None, token: str = '') -> dict:
+        headers = {'Content-Type': 'application/json; charset=utf-8'}
+        if token:
+            headers['Authorization'] = 'Bearer ' + token
+        data = json.dumps(body, ensure_ascii=False).encode() if body is not None else None
+        with urlopen(Request(self.base + path, data=data, headers=headers), timeout=15) as response:
+            payload = json.load(response)
+        if payload.get('code') != 0:
+            raise RuntimeError(f"Feishu API error {payload.get('code')}: {payload.get('msg')}")
+        return payload
+
+    def token(self) -> str:
+        with self._lock:
+            if time.monotonic() >= self._expires:
+                result = self._request('/open-apis/auth/v3/tenant_access_token/internal',
+                                       {'app_id': self.app_id, 'app_secret': self.app_secret})
+                self._token = result['tenant_access_token']
+                self._expires = time.monotonic() + max(1, int(result['expire']) - 120)
+            return self._token
+
+    def reply(self, message_id: str, text: str, key: str) -> str:
+        result = self._request('/open-apis/im/v1/messages/' + quote(message_id, safe='') + '/reply',
+                               {'msg_type': 'text', 'content': json.dumps({'text': text}, ensure_ascii=False),
+                                'reply_in_thread': True, 'uuid': str(uuid.uuid5(uuid.NAMESPACE_URL, key))}, self.token())
+        sent = result.get('data', {}).get('message_id')
+        if not sent:
+            raise RuntimeError('Feishu reply returned no message_id')
+        return sent
+
+    def sender_name(self, open_id: str) -> str:
+        result = self._request('/open-apis/contact/v3/users/' + quote(open_id, safe='') + '?user_id_type=open_id', token=self.token())
+        return result.get('data', {}).get('user', {}).get('name', '')
+
+    def message_text(self, message_id: str) -> str:
+        result = self._request('/open-apis/im/v1/messages/' + quote(message_id, safe=''), token=self.token())
+        items = result.get('data', {}).get('items', [])
+        if not items:
+            return ''
+        content = items[0].get('body', {}).get('content', '{}')
+        return _text_fragments(json.loads(content))[:2000]
+
+
+def enqueue_feedback(payload: dict[str, Any], agent: Any, allowed: frozenset[str]) -> None:
+    header, event = payload.get('header') or {}, payload.get('event') or {}
+    if not isinstance(header, dict) or header.get('event_type') != 'im.message.receive_v1' or not isinstance(event, dict):
+        return
+    message, sender = event.get('message') or {}, event.get('sender') or {}
+    if not isinstance(message, dict) or not isinstance(sender, dict):
+        return
+    if message.get('chat_id') not in allowed or message.get('chat_type') != 'group' or sender.get('sender_type') == 'app':
+        return
+    if message.get('message_type') not in {'text', 'post', 'rich_text'}:
+        return
+    content = json.loads(message.get('content') or '{}')
+    text = ' '.join(_text_fragments(content).split())
+    if not text or not URL.sub('', text).strip(' \t\r\n.,!?;:()[]{}、，。！？；：（）【】《》'):
+        return
+    sender_id = sender.get('sender_id') or {}
+    agent.enqueue(str(message.get('message_id') or ''), message['chat_id'],
+                  str(sender_id.get('open_id') or '') if isinstance(sender_id, dict) else '', text,
+                  str(message.get('parent_id') or message.get('root_id') or ''))
+
+
+def authorized() -> bool:
+    token = current_app.config['INTERNAL_TOKEN']
+    supplied = request.args.get('token', '') or request.headers.get('Authorization', '').removeprefix('Bearer ')
+    return bool(token and supplied and hmac.compare_digest(token, supplied))
+
+
+@blueprint.get('/internal/feedback/pending')
+def feedback_pending() -> Any:
+    if not authorized():
+        return {'error': 'unauthorized'}, 403
+    try:
+        cursor = int(request.args.get('cursor', '0'))
+        if cursor < 0:
+            raise ValueError('negative cursor')
+    except ValueError:
+        return {'error': 'invalid cursor'}, 400
+    return current_app.feedback_agent.pending(cursor)
+
+
+@blueprint.post('/internal/feedback/resolve')
+def feedback_resolve() -> Any:
+    if not authorized():
+        return {'error': 'unauthorized'}, 403
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or any(not isinstance(data.get(k, ''), str) for k in ('issue','status','resolution_note','commit_ref')):
+        return {'error': 'invalid request'}, 400
+    try:
+        result = current_app.feedback_agent.resolve(*(data.get(k, '').strip() for k in ('issue','status','resolution_note','commit_ref')))
+    except ValueError as exc:
+        return {'error': str(exc)}, 400
+    except LookupError as exc:
+        return {'error': str(exc)}, 404
+    return {'entry': result, 'reply': 'queued'}

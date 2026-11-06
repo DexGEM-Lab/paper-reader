@@ -2143,6 +2143,11 @@ def create_app(
     app.config["AUTH_MODE"] = runtime_config.auth_mode
     app.config["FEISHU_ALLOWED_CHAT_ID"] = runtime_config.feishu_allowed_chat_id
     app.config.update(FEISHU_EVENT_TOKEN=runtime_config.feishu_event_token, FEISHU_ENCRYPT_KEY=runtime_config.feishu_encrypt_key, FEISHU_MONITOR_CHAT_IDS=runtime_config.feishu_monitor_chat_ids)
+    app.config.update(FEISHU_FEEDBACK_CHAT_IDS=runtime_config.feishu_feedback_chat_ids, INTERNAL_TOKEN=runtime_config.internal_token)
+    from .feedback import FeedbackAgent
+    app.feedback_agent = FeedbackAgent(root / ".paper-reader-feedback.sqlite3", runtime_config)
+    if runtime_config.feishu_feedback_chat_ids:
+        app.feedback_agent.start()
     from .feishu_events import blueprint as feishu_events_blueprint
     app.register_blueprint(feishu_events_blueprint)
     app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(hours=runtime_config.session_ttl_hours)
@@ -2378,7 +2383,7 @@ def create_app(
     @app.before_request
     def require_login() -> Any:
         endpoint = request.endpoint or ""
-        allowed = {"login", "register", "logout", "health", "feishu_login", "feishu_callback", "feishu_events.webhook"}
+        allowed = {"login", "register", "logout", "health", "feishu_login", "feishu_callback", "feishu_events.webhook", "feishu_events.feedback_pending", "feishu_events.feedback_resolve"}
         if endpoint == "register" and app.config["AUTH_MODE"] == "feishu":
             abort(404)
         if endpoint in allowed or endpoint.startswith("static"):
@@ -2390,7 +2395,7 @@ def create_app(
 
     @app.before_request
     def protect_mutating_requests() -> Any:
-        if request.method not in {"POST", "PUT", "DELETE"} or request.endpoint in {"feishu_callback", "feishu_events.webhook"}:
+        if request.method not in {"POST", "PUT", "DELETE"} or request.endpoint in {"feishu_callback", "feishu_events.webhook", "feishu_events.feedback_resolve"}:
             return None
         if request.endpoint == "login" and app.config["AUTH_MODE"] == "feishu":
             abort(404)

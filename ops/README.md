@@ -14,3 +14,9 @@ The oss-bot key lasts 168h. Renew before expiry: in Feishu group 🖥 算力-Dex
 auto-approves runtime ≤1w and DMs the new key to the requester. Install into
 `/etc/paper-reader/s3-backup.env` on the VPS. Long-term fix: ask the storage platform
 owners for a durable service account.
+
+## Feedback agent
+
+Set `PAPER_READER_FEISHU_FEEDBACK_CHAT_IDS` to comma-separated feedback group IDs and `PAPER_READER_INTERNAL_TOKEN` to a strong secret in the root-only app environment. Feedback chats also feed normal link import. The worker persists inbound messages, issue changes and outgoing threaded replies under the data library directory; transient model/API errors are retried. Gunicorn currently runs one worker, which is required for one feedback dispatcher.
+
+Run `ops/feedback_watch.py --token-file <mode-0600-file> --cursor-file <private-state-file> --to <live-pi-session>` on the workstation; it polls every 180 seconds and advances its cursor only after `pi-notify` accepts the batch. The named Pi session must remain connected. Use an Authorization bearer header to call `/internal/feedback/pending?cursor=0`, or POST JSON `{ "issue": "ISSUE-001", "status": "fixed", "resolution_note": "...", "commit_ref": "..." }` to `/internal/feedback/resolve`. Updates and threaded replies are durably queued; `reply: queued` does not mean Feishu has delivered it yet. Check service logs for retries. Feature evaluation uses an `FR-NNN` identifier and the same endpoint.
