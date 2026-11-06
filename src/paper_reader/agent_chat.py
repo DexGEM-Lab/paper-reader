@@ -5,13 +5,18 @@ import json
 import os
 import re
 import shutil
+import stat
+import tempfile
 import subprocess
 import threading
 import time
 import uuid
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping
+
+from .agent_sandbox import CWD_RULE, SEARCH_EXTENSION, TOOLS, SharedAgentSandbox
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,12 +139,11 @@ def _safe_file_name(value: str, fallback: str) -> str:
     return (cleaned or fallback)[:160]
 
 
-def _link_or_copy(source: Path, target: Path) -> None:
+def _copy_material(source: Path, target: Path) -> None:
+    # Host symlinks are neither usable nor appropriate inside the sandbox.
+    # Copies also prevent agent edits from changing the canonical library.
     target.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        target.symlink_to(source.resolve())
-    except OSError:
-        shutil.copy2(source, target)
+    shutil.copy2(source, target)
 
 
 class PiAgentChat:
@@ -153,6 +157,9 @@ class PiAgentChat:
         library: Any,
         prompt_store: Any,
         team_store: Any,
+        sandbox_container: str = "paper-reader-agents",
+        docker_bin: str = "docker",
+        sandbox: SharedAgentSandbox | None = None,
         popen_factory: Callable[..., subprocess.Popen[Any]] = subprocess.Popen,
         poll_interval: float = 0.08,
     ) -> None:
@@ -160,6 +167,10 @@ class PiAgentChat:
         self.sessions_root.mkdir(parents=True, exist_ok=True)
         self.pi_bin = pi_bin
         self.pi_dir = Path(pi_dir).resolve()
+        self.sandbox = sandbox or SharedAgentSandbox(
+            sessions_root=self.sessions_root, pi_dir=self.pi_dir,
+            container=sandbox_container, docker_bin=docker_bin,
+        )
         self.timeout_seconds = float(timeout_seconds)
         self.library = library
         self.prompt_store = prompt_store
@@ -189,6 +200,37 @@ class PiAgentChat:
     def session_root_for(self, key: str) -> Path:
         return self.sessions_root / agent_session_slug(key)
 
+    @contextmanager
+    def _managed_directory(self, path: Path):
+        """Anchor host writes with openat/O_NOFOLLOW, never follow bot symlinks."""
+        relative = path.relative_to(self.sessions_root)
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        fd = os.open(self.sessions_root, flags)
+        try:
+            for part in relative.parts:
+                try:
+                    os.mkdir(part, dir_fd=fd)
+                except FileExistsError:
+                    pass
+                next_fd = os.open(part, flags, dir_fd=fd)
+                os.close(fd)
+                fd = next_fd
+            yield fd
+        finally:
+            os.close(fd)
+
+    @contextmanager
+    def _managed_file(self, path: Path, mode: str):
+        with self._managed_directory(path.parent) as directory:
+            flags = os.O_RDONLY if mode == "rb" else os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+            fd = os.open(path.name, flags | os.O_NOFOLLOW, 0o640, dir_fd=directory)
+            with os.fdopen(fd, mode) as handle:
+                yield handle
+
+    def _write_managed_text(self, path: Path, text: str) -> None:
+        with self._managed_file(path, "wb") as handle:
+            handle.write(text.encode("utf-8"))
+
     def prepare_material_package(
         self,
         rel_path: str,
@@ -201,10 +243,14 @@ class PiAgentChat:
             raise FileNotFoundError(rel_path)
         session_root = self.session_root_for(session_key)
         cwd = session_root / "cwd"
-        cwd.mkdir(parents=True, exist_ok=True)
+        with self._managed_directory(cwd):
+            pass
 
-        next_materials = cwd / f".materials-next-{uuid.uuid4().hex}"
-        next_materials.mkdir(parents=True)
+        # Build material copies outside the writable export, then atomically
+        # install via an anchored dir fd; bots cannot redirect host copy writes.
+        staging = Path(tempfile.mkdtemp(prefix=".agent-materials-", dir=self.sessions_root.parent))
+        next_materials = staging / "materials"
+        next_materials.mkdir()
         manifest: list[tuple[str, str]] = []
 
         def add_file(source: Path, section: str, label: str, index: int) -> None:
@@ -212,7 +258,7 @@ class PiAgentChat:
                 return
             filename = _safe_file_name(source.name, f"file-{index}")
             target = next_materials / section / f"{index:02d}-{filename}"
-            _link_or_copy(source, target)
+            _copy_material(source, target)
             manifest.append((label, f"materials/{target.relative_to(next_materials).as_posix()}"))
 
         source_path = Path(self.library.resolve_relative_path(rel_path))
@@ -249,13 +295,16 @@ class PiAgentChat:
             seen_results.add(str(result_rel_path))
             add_file(result_path, "interpretations", f"已有解读：{prompt.name}", len(seen_results))
 
-        materials = cwd / "materials"
-        if materials.exists() or materials.is_symlink():
-            if materials.is_dir() and not materials.is_symlink():
-                shutil.rmtree(materials)
-            else:
-                materials.unlink()
-        next_materials.rename(materials)
+        with self._managed_directory(cwd) as directory:
+            try:
+                if stat.S_ISDIR(os.stat("materials", dir_fd=directory, follow_symlinks=False).st_mode):
+                    shutil.rmtree("materials", dir_fd=directory)
+                else:
+                    os.unlink("materials", dir_fd=directory)
+            except FileNotFoundError:
+                pass
+            os.rename(next_materials, "materials", dst_dir_fd=directory)
+        shutil.rmtree(staging)
 
         sources = metadata.get("sources") if isinstance(metadata.get("sources"), list) else []
         provenance_url = str(metadata.get("canonical_url") or "").strip()
@@ -285,7 +334,7 @@ class PiAgentChat:
             )
         if not manifest:
             readme_lines.append("- 暂无可用的本地材料。")
-        (cwd / "README.md").write_text("\n".join(readme_lines).rstrip() + "\n", encoding="utf-8")
+        self._write_managed_text(cwd / "README.md", "\n".join(readme_lines).rstrip() + "\n")
 
         team_context = (
             "这是团队共享会话。不同成员的提问会带成员署名；结合此前对话继续回答。"
@@ -305,11 +354,12 @@ class PiAgentChat:
 
 1. 用户使用中文时用中文回答；用户使用英文时用英文回答。
 2. 结论必须尽量引用本地文件证据，注明页码、章节或文件路径；不确定时明确指出证据边界。
-3. 用户要求提取数据、写代码、起草文本或执行其他任务时，直接完成任务。你在当前目录拥有完整工具权限。
-4. 保持回答紧凑，优先给出结论与可执行结果，避免复述问题。
-5. 实质性回答结尾必须列出“来源定位”，给出页码、章节或本地文件路径。
+3. 用户要求提取数据、写代码、起草文本或执行其他任务时，直接完成任务。你在当前目录拥有完整工具权限，可以使用通用 bash、web_search 和 web_fetch；本地材料不足时主动联网检索、抓取和核对，不要以“无法联网”拒绝。
+4. 只允许在本轮初始 cwd 内新建、修改或删除文件；不得改动 cwd 外的任何文件（包括其他论文目录），也不得通过 cd、绝对路径或符号链接绕过。下载、代码、笔记和临时文件均放在当前 cwd 内。
+5. 保持回答紧凑，优先给出结论与可执行结果，避免复述问题。
+6. 实质性回答结尾必须列出“来源定位”，给出页码、章节、本地文件路径或外部来源 URL；明确区分论文证据、外部资料与推断。
 """
-        (cwd / "AGENTS.md").write_text(agents, encoding="utf-8")
+        self._write_managed_text(cwd / "AGENTS.md", agents)
         return cwd
 
     def run_turn(
@@ -338,7 +388,8 @@ class PiAgentChat:
 
     def _session_files(self, sessions_dir: Path) -> list[Path]:
         return sorted(
-            (path for path in sessions_dir.rglob("*.jsonl") if path.is_file()),
+            (path for path in sessions_dir.rglob("*.jsonl")
+             if path.is_file() and not path.is_symlink() and path.resolve().is_relative_to(self.sessions_root)),
             key=lambda path: (path.stat().st_mtime_ns, path.name),
         )
 
@@ -352,23 +403,39 @@ class PiAgentChat:
     ) -> str:
         session_root = self.session_root_for(session_key)
         sessions_dir = session_root / "sessions"
-        sessions_dir.mkdir(parents=True, exist_ok=True)
+        with self._managed_directory(sessions_dir):
+            pass
         existing_files = self._session_files(sessions_dir)
         log_path = existing_files[-1] if existing_files else None
         offset = log_path.stat().st_size if log_path is not None else 0
 
-        command = [self.pi_bin]
+        self.sandbox.validate()
+        # Load only the reviewed search plugin, not project-local extensions or
+        # the workstation's personal skills/packages. Bash stays fully general.
+        pi_args = [
+            "--no-extensions", "-e", SEARCH_EXTENSION,
+            "--no-skills", "--no-prompt-templates", "--no-themes",
+            "--tools", TOOLS, "--append-system-prompt", CWD_RULE,
+        ]
         if log_path is not None:
-            command.extend(["--session", str(log_path)])
+            pi_args.extend(["--session", str(self.sandbox.container_path(log_path))])
         else:
-            command.extend(["--session-dir", str(sessions_dir)])
-        command.extend(["-p", prompt])
+            pi_args.extend(["--session-dir", str(self.sandbox.container_path(sessions_dir))])
+        pi_args.extend(["-p", prompt])
+        turn_id = uuid.uuid4().hex
+        command = self.sandbox.command(
+            cwd=cwd, pi_args=pi_args, pi_bin=self.pi_bin,
+            timeout=self.timeout_seconds, turn_id=turn_id,
+        )
 
-        env = os.environ.copy()
-        env["PI_CODING_AGENT_DIR"] = str(self.pi_dir)
+        # Docker receives host connection settings only. No host app secrets are
+        # passed into the container (whose limited LLM key is provisioned apart).
+        env = {key: value for key, value in os.environ.items() if key in {
+            "PATH", "HOME", "DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG", "XDG_RUNTIME_DIR",
+        }}
         stderr_path = session_root / "last-stderr.log"
         started = time.monotonic()
-        with stderr_path.open("wb") as stderr_handle:
+        with self._managed_file(stderr_path, "wb") as stderr_handle, ExitStack() as cleanup:
             try:
                 process = self.popen_factory(
                     command,
@@ -379,8 +446,9 @@ class PiAgentChat:
                     stderr=stderr_handle,
                 )
             except FileNotFoundError as exc:
-                raise RuntimeError("Pi agent 未安装或 PAPER_READER_PI_BIN 配置错误。") from exc
+                raise RuntimeError("Docker 未安装或 PAPER_READER_PI_DOCKER_BIN 配置错误；不会在宿主机运行 Pi。") from exc
 
+            cleanup.callback(self.sandbox.stop, process, turn_id)
             final_text = ""
             error_text = ""
             while True:
@@ -414,27 +482,30 @@ class PiAgentChat:
                                     final_text = event.text
                                     error_text = ""
                     break
-                if time.monotonic() - started >= self.timeout_seconds:
-                    process.kill()
-                    process.wait(timeout=5)
+                # The in-container supervisor owns the real deadline. Killing
+                # docker exec alone would leave Pi and bash running inside it.
+                if time.monotonic() - started >= self.timeout_seconds + 5:
+                    self.sandbox.stop(process, turn_id)
                     raise RuntimeError(f"Pi agent 超过 {int(self.timeout_seconds)} 秒未完成，已停止本轮任务。")
                 time.sleep(self.poll_interval)
 
+        if return_code == 124:
+            raise RuntimeError(f"Pi agent 超过 {int(self.timeout_seconds)} 秒未完成，已停止本轮任务。")
         if error_text:
             emit(AgentChatEvent(kind="error", text=error_text))
             raise RuntimeError(error_text)
         if return_code != 0:
-            stderr_text = stderr_path.read_text(encoding="utf-8", errors="replace").strip()
+            with self._managed_file(stderr_path, "rb") as handle:
+                stderr_text = handle.read().decode("utf-8", errors="replace").strip()
             detail = stderr_text[-800:] if stderr_text else f"退出码 {return_code}"
             raise RuntimeError(f"Pi agent 执行失败：{detail}")
         if not final_text.strip():
             raise RuntimeError("Pi agent 已结束，但没有生成最终回答。")
         return final_text.strip()
 
-    @staticmethod
-    def _read_complete_rows(path: Path, offset: int) -> tuple[list[dict[str, Any]], int]:
+    def _read_complete_rows(self, path: Path, offset: int) -> tuple[list[dict[str, Any]], int]:
         try:
-            with path.open("rb") as handle:
+            with self._managed_file(path, "rb") as handle:
                 handle.seek(offset)
                 payload = handle.read()
         except FileNotFoundError:

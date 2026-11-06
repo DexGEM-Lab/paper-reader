@@ -1,0 +1,19 @@
+{
+  "providers": {
+    "dexgem-messages": {
+      "baseUrl": "https://litellm.dex-gem.ai",
+      "api": "anthropic-messages",
+      "apiKey": "$PAPER_READER_LLM_API_KEY",
+      "models": [
+        {
+          "id": "claude-sonnet-5-5",
+          "name": "Paper Reader Claude Sonnet",
+          "reasoning": true,
+          "input": ["text", "image"],
+          "contextWindow": 200000,
+          "maxTokens": 16384
+        }
+      ]
+    }
+  }
+}

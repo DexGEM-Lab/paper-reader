@@ -28,3 +28,15 @@ Set `PAPER_READER_FEISHU_FEEDBACK_CHAT_IDS` to comma-separated feedback group ID
 Run `ops/feedback_watch.py --token-file <mode-0600-file> --cursor-file <private-state-file> --to <live-pi-session>` on the workstation; it polls every 180 seconds and advances its cursor only after `pi-notify` accepts the batch. The named Pi session must remain connected. Use an Authorization bearer header to call `/internal/feedback/pending?cursor=0`, or POST JSON `{ "issue": "ISSUE-001", "status": "fixed", "resolution_note": "...", "commit_ref": "..." }` to `/internal/feedback/resolve`. Updates and threaded replies are durably queued; `reply: queued` does not mean Feishu has delivered it yet. Check service logs for retries. Feature evaluation uses an `FR-NNN` identifier and the same endpoint.
 
 The Feishu app needs tenant scopes `im:message:send_as_bot` for replies, `im:message:readonly` for fetching a parent outside the local ledger, and both `contact:contact.base:readonly` and `contact:user.base:readonly` (with appropriate contact data access) to resolve a sender's name. When a scope changes, restart the reader service to refresh its cached tenant token. If name lookup is unavailable, the ledger retains the sender's app-scoped open ID; if parent lookup fails, triage continues with available local context. Check the `jobs` and `outbox` tables for durable retry errors.
+
+## Shared paper-bot execution sandbox (FR-004)
+
+The application now requires one preprovisioned Docker sandbox for all paper chats;
+there is no host-Pi fallback. The image, curated search-enabled Pi profile,
+scoped bridge firewall, provisioning script, systemd runtime unit and verification
+instructions are in [agent-sandbox/README.md](agent-sandbox/README.md). Install the
+runtime before deploying the new reader unit; the updated host reader unit grants
+Docker access to its trusted controller and requires `paper-reader-agents.service`.
+The bot container never receives the Docker socket or the full app environment.
+These new artifacts require a coordinated operator rollout; adding them to the
+repository alone does not provision or deploy the runtime.

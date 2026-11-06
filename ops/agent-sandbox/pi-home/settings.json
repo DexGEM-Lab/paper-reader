@@ -1,0 +1,8 @@
+{
+  "defaultProvider": "dexgem-messages",
+  "defaultModel": "claude-sonnet-5-5",
+  "defaultThinkingLevel": "medium",
+  "defaultProjectTrust": "never",
+  "enableInstallTelemetry": false,
+  "packages": []
+}

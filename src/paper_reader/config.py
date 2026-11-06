@@ -161,6 +161,8 @@ class PaperReaderConfig:
     pi_bin: str
     pi_dir: Path
     pi_timeout: float
+    pi_sandbox_container: str
+    pi_docker_bin: str
 
     @property
     def feishu_enabled(self) -> bool:
@@ -299,4 +301,6 @@ def load_config(
             setting("PAPER_READER_PI_TIMEOUT", "300"),
             name="PAPER_READER_PI_TIMEOUT",
         ),
+        pi_sandbox_container=setting("PAPER_READER_PI_SANDBOX_CONTAINER", "paper-reader-agents"),
+        pi_docker_bin=setting("PAPER_READER_PI_DOCKER_BIN", "docker"),
     )

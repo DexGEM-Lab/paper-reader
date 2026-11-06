@@ -114,9 +114,15 @@ PAPER_READER_AGENT_CHAT_ENABLED=false
 PAPER_READER_PI_BIN=pi
 PAPER_READER_PI_DIR=/opt/paper-reader/pi-home
 PAPER_READER_PI_TIMEOUT=300
+PAPER_READER_PI_SANDBOX_CONTAINER=paper-reader-agents
+PAPER_READER_PI_DOCKER_BIN=docker
 ```
 
-启用后，我爱学按用户与论文隔离会话，一起学按论文共享会话。应用把 `PAPER_READER_PI_DIR` 作为子进程的 `PI_CODING_AGENT_DIR`。状态写入 `<data>/agent-sessions/`；每轮刷新本地论文、网页快照、附件和已有解读材料，并从 Pi session JSONL 投影出简洁的工具状态、过程叙述和最终回答。聊天正文仍写入现有 SQLite `chat_messages` 表。每个会话同一时间只执行一轮，重叠请求返回 HTTP 409。session 中出现 `stopReason=error` / `errorMessage` 时即判定失败，即使 Pi 进程退出码为 0。
+启用前必须按 [共享 sandbox 部署说明](ops/agent-sandbox/README.md) 准备运行环境。所有论文 bot 共用一个非 root、只读根文件系统、资源受限的 Docker 容器；应用通过 `docker exec` 运行 Pi，不在宿主机执行 bot 工具。容器只挂载 agent 会话目录和只读的专用 Pi 配置，具备公网联网能力，专用网桥规则阻止访问宿主机及私网服务。`PAPER_READER_PI_DIR` 是宿主机上的专用配置目录，在容器内固定映射为 `/pi-home`；`PI_BIN` 指向容器内程序。缺少或错误配置 sandbox 时明确报错，不回退到宿主机。
+
+我爱学按用户与论文区分会话，一起学按论文共享会话。每个会话拥有独立 cwd，状态保存在 `<data>/agent-sessions/`；每轮复制刷新论文、网页快照、附件和已有解读材料。bot 可以使用通用 bash、`web_search` 和 `web_fetch`，系统提示词要求只在初始 cwd 内改动文件，并区分本地证据与外部 URL。各 bot 共用执行环境，不提供对抗性的会话间文件隔离。
+
+应用从 Pi session JSONL 投影简洁的工具状态、过程叙述和最终回答，聊天正文仍写入 SQLite `chat_messages`。每个会话同一时间只执行一轮，重叠请求返回 HTTP 409。`stopReason=error` / `errorMessage` 即判定失败，即使 Pi 退出码为 0；超时由容器内 supervisor 停止本轮及其工具子进程。
 
 ### 批量导入飞书历史链接
 

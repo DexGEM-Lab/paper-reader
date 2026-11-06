@@ -3716,6 +3716,8 @@ def create_app(
             data_dir=runtime_config.data_dir,
             pi_bin=runtime_config.pi_bin,
             pi_dir=runtime_config.pi_dir,
+            sandbox_container=runtime_config.pi_sandbox_container,
+            docker_bin=runtime_config.pi_docker_bin,
             timeout_seconds=runtime_config.pi_timeout,
             library=app.library,
             prompt_store=app.prompt_store,

@@ -1,0 +1,19 @@
+[Unit]
+Description=Shared paper-bot execution sandbox
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+Before=paper-reader.service
+
+[Service]
+Type=simple
+# Operator provision.sh creates the container once; never one per paper.
+ExecStartPre=/opt/paper-reader/app/ops/agent-sandbox/network.sh
+ExecStart=/usr/bin/docker start --attach paper-reader-agents
+ExecStop=/usr/bin/docker stop --time 10 paper-reader-agents
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=20s
+
+[Install]
+WantedBy=multi-user.target

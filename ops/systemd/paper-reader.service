@@ -1,12 +1,15 @@
 [Unit]
 Description=DexGEM Paper Reader
-After=network-online.target
+After=network-online.target paper-reader-agents.service
 Wants=network-online.target
+Requires=paper-reader-agents.service
 
 [Service]
 Type=simple
 User=paper-reader
 Group=paper-reader
+# Host controller only; the sandbox never mounts the Docker socket.
+SupplementaryGroups=docker
 WorkingDirectory=/opt/paper-reader/app
 Environment=PYTHONPATH=/opt/paper-reader/app
 EnvironmentFile=/etc/paper-reader/litellm.env
