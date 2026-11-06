@@ -292,7 +292,11 @@ label span {
 
 .workspace-shell {
   gap: 0;
-  height: clamp(720px, calc(100dvh - 96px), 94dvh);
+  /* ISSUE-005: at browser zoom the CSS viewport shrinks; a 720px minimum
+     shell height overflowed small viewports and trapped content in nested
+     scroll areas. Size the shell to the actual viewport instead. */
+  height: calc(100dvh - var(--topbar-height, 60px) - 24px);
+  min-height: 320px;
 }
 
 /* ISSUE-005 root fix: `main` is display:grid with an auto/max-content single
@@ -825,6 +829,23 @@ main {
   border-radius: 0;
   background: var(--paper);
 }
+
+/* ISSUE-005: text snapshots must not create a second inner scrollbar. The
+   article grows naturally and the center pane provides the single scroll
+   context, so zoomed/small viewports keep the full content reachable. */
+.source-text-viewer.source-viewer {
+  height: auto;
+  min-height: 0;
+  grid-template-rows: none;
+  display: block;
+}
+.source-viewer .source-viewer-body {
+  overflow: visible;
+}
+.viewer-pane {
+  overflow-y: auto;
+}
+
 
 .source-viewer-head,
 .prompt-viewer-head {
