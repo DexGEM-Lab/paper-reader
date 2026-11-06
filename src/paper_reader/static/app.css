@@ -2814,3 +2814,81 @@ table {
   height: auto;
   margin: 1rem auto;
 }
+
+/* Mobile (Stage V3-fix): compact item header — reading first on small screens. */
+@media (max-width: 999.98px) {
+  .item-header {
+    padding: 8px 12px 4px;
+  }
+  .item-header .eyebrow {
+    font-size: 10px;
+    margin: 0 0 2px;
+  }
+  .item-header .item-title {
+    font-size: 17px;
+    line-height: 1.25;
+    margin: 0 0 4px;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .item-header .item-subrow {
+    margin: 0;
+    gap: 6px;
+  }
+  .item-header .item-meta {
+    font-size: 11px;
+    margin: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  /* Tags live inside the 详情 disclosure on small screens. */
+  .item-header .item-tags {
+    display: none;
+  }
+  .item-header .item-actions {
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+    padding: 6px 0 2px;
+    scrollbar-width: none;
+  }
+  .item-header .item-actions::-webkit-scrollbar {
+    display: none;
+  }
+  .item-header .item-actions .item-action,
+  .item-header .item-actions .inline-form,
+  .item-header .item-actions button {
+    flex: 0 0 auto;
+  }
+  .item-header .item-actions .item-action,
+  .item-header .item-actions .inline-form button,
+  .item-header .item-actions > button {
+    height: 30px;
+    padding: 0 9px;
+    font-size: 12px;
+    white-space: nowrap;
+  }
+  .item-header .viewer-tabs {
+    margin-top: 2px;
+  }
+  .item-header .viewer-tabs .viewer-tab,
+  .item-header .viewer-tabs button {
+    height: 28px;
+    padding: 0 10px;
+    font-size: 12px;
+  }
+  .item-header .item-detail-toggle,
+  .item-header .item-summary-line {
+    font-size: 11px;
+    padding: 2px 0;
+  }
+  /* The fullscreen/duplicate-title block under the header wastes the first
+     screenful on mobile — the content follows directly. */
+  .source-viewer .item-header,
+  .prompt-viewer .item-header {
+    border-bottom: var(--border-quiet);
+  }
+}
