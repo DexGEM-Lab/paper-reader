@@ -2108,7 +2108,7 @@ table {
   display: none;
 }
 
-@media (min-width: 1600px) {
+@media (min-width: 1000px) {
   .workspace-shell.tri-workspace:not(.right-collapsed) {
     grid-template-columns: var(--left-pane-width, 288px) var(--left-resizer-width, 10px) minmax(0, 1fr) var(--right-resizer-width, 10px) var(--right-pane-width, 392px);
   }
@@ -2117,25 +2117,6 @@ table {
   }
 }
 
-@media (max-width: 1599.98px) {
-  .workspace-shell.tri-workspace .pane-right {
-    position: fixed;
-    top: var(--topbar-height);
-    right: 0;
-    bottom: 0;
-    width: min(400px, 94vw);
-    height: auto;
-    z-index: 54;
-    background: var(--paper);
-    border-left: var(--border-strong);
-  }
-
-  /* ISSUE-005: when the discussion drawer is open, push the reading pane's
-     content into the remaining width instead of letting it clip underneath —
-     otherwise at browser zoom the drawer physically covers most of the text. */
-  .workspace-shell.tri-workspace:not(.right-collapsed) .pane-center {
-    margin-right: min(400px, 94vw);
-  }
 
   /* Fullscreen chat must escape the fixed drawer overlay. */
   body.assistant-expanded .workspace-shell.tri-workspace .pane-right {
