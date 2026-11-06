@@ -98,6 +98,26 @@ class DiscoveryPipelineTests(unittest.TestCase):
         self.assertEqual(candidates[0].url, "https://arxiv.org/abs/2601.00001")
         self.assertEqual(candidates[0].source, "huggingface")
 
+    def test_interest_profile_includes_only_aggregate_distinct_saver_signal(self) -> None:
+        alice = self.store.create_user("alice", "Alice", "password123", "member")
+        bob = self.store.create_user("bob", "Bob", "password123", "member")
+        personal = self.store.create_collection(owner_type="user", user_id=alice.id, name="Mine")
+        team = self.store.create_collection(owner_type="team", user_id=alice.id, name="Team")
+        self.store.set_collection_membership(
+            collection_id=personal, rel_path="kept.pdf", user_id=alice.id, present=True
+        )
+        self.store.set_collection_membership(
+            collection_id=team, rel_path="kept.pdf", user_id=bob.id, present=True
+        )
+        self.service.interest_profile(force=True)
+        prompt = self.client.calls[-1]
+        self.assertIn('"distinct_savers":2', prompt)
+        self.assertIn("权重应显著高于条目仅存在于书库", prompt)
+        self.assertNotIn("Alice", prompt)
+        self.assertNotIn("Bob", prompt)
+        self.assertNotIn("alice", prompt)
+        self.assertNotIn("bob", prompt)
+
     def test_run_fetches_each_source_once_dedupes_and_scores(self) -> None:
         def fake_fetch(url: str, **kwargs):  # noqa: ANN001
             body = hf_html() if "huggingface.co" in url else atom_xml(

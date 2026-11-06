@@ -211,7 +211,12 @@ class DiscoveryService:
                 return cached
         rows = self.store.library_interest_rows()
         compact_library = [
-            {"title": row["title"][:220], "tags": row["tags"][:12], "kind": row["kind"]}
+            {
+                "title": row["title"][:220],
+                "tags": row["tags"][:12],
+                "kind": row["kind"],
+                "distinct_savers": int(row.get("saver_count") or 0),
+            }
             for row in rows
         ]
         if not compact_library:
@@ -220,7 +225,8 @@ class DiscoveryService:
             prompt = (
                 "你是 DexGEM Lab 的研究编辑。根据下面书库中保留条目的标题、标签和类型，写一份中文兴趣画像，"
                 "用于筛选每日新论文。只描述反复出现的研究主题、方法偏好、应用边界和不感兴趣的泛化方向；"
-                "不要列举每篇论文。严格不超过 500 tokens。\n\n书库信号：\n"
+                "distinct_savers 是收藏该条目的去重人数，代表主动兴趣，权重应显著高于条目仅存在于书库；"
+                "只使用聚合人数，不推断或暴露个人身份。不要列举每篇论文。严格不超过 500 tokens。\n\n书库信号：\n"
                 + json.dumps(compact_library, ensure_ascii=False, separators=(",", ":"))
             )
             try:
@@ -331,10 +337,15 @@ class DiscoveryService:
 
     @staticmethod
     def _heuristic_profile(rows: list[dict[str, Any]]) -> str:
-        tags: list[str] = []
+        tag_weights: dict[str, int] = {}
+        first_seen: dict[str, int] = {}
         for row in rows:
-            tags.extend(str(tag) for tag in row["tags"])
-        recurring = list(dict.fromkeys(tags))[:16]
+            # A saved paper contributes extra aggregate votes without exposing who saved it.
+            weight = 1 + min(5, int(row.get("saver_count") or 0))
+            for tag in (str(item) for item in row["tags"]):
+                first_seen.setdefault(tag, len(first_seen))
+                tag_weights[tag] = tag_weights.get(tag, 0) + weight
+        recurring = sorted(tag_weights, key=lambda tag: (-tag_weights[tag], first_seen[tag]))[:16]
         label = "、".join(recurring) if recurring else "近期书库主题"
         return f"实验室近期持续关注：{label}。优先推荐有清晰技术贡献、可复现实验或研究系统价值的论文。"
 
