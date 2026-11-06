@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import os
 import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
+from src.paper_reader.app import create_app
 from src.paper_reader.team_store import TeamStore
 
 
@@ -153,6 +156,131 @@ class CollectionStoreTests(unittest.TestCase):
         self.assertIsNotNone(persisted.digest_generated_at)
         row = next(item for item in self.store.library_interest_rows() if item["rel_path"] == "a.pdf")
         self.assertEqual(row["saver_count"], 2)
+
+
+class CollectionRouteTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tempdir.name)
+        self.env_patch = patch.dict(
+            os.environ,
+            {
+                "PAPER_READER_ENV_FILE": str(self.root / ".no-env"),
+                "PAPER_READER_SECRET_KEY": "collection-test-secret",
+                "PAPER_READER_LOGIN_USERNAME": "admin",
+                "PAPER_READER_LOGIN_PASSWORD": "test-admin-password",
+            },
+            clear=False,
+        )
+        self.env_patch.start()
+        self.app = create_app(self.root, source_archive_root=self.root / "sources")
+        self.app.testing = True
+        self.app.config["CSRF_PROTECTION_ENABLED"] = False
+        self.client = self.app.test_client()
+        self.admin = self.app.team_store.get_user_by_username("admin")
+        assert self.admin is not None
+        self.login(self.admin)
+        (self.root / "sample.md").write_text("# Sample paper\n\nA useful robotics method.", encoding="utf-8")
+        self.client.get("/")
+
+    def tearDown(self) -> None:
+        self.app.action_queue.stop()
+        self.app.job_queue.stop_all()
+        self.env_patch.stop()
+        self.tempdir.cleanup()
+
+    def login(self, user) -> None:
+        with self.client.session_transaction() as session:
+            session["authenticated"] = True
+            session["user_id"] = user.id
+            session["username"] = user.username
+            session["display_name"] = user.display_name
+            session["role"] = user.role
+
+    def test_json_create_and_idempotent_toggle(self) -> None:
+        created = self.client.post(
+            "/collections/create", json={"owner_type": "user", "name": "VLA"}
+        )
+        self.assertEqual(created.status_code, 201)
+        collection_id = created.json["collection"]["id"]
+        for _ in range(2):
+            response = self.client.post(
+                "/collections/toggle",
+                json={"collection_id": collection_id, "rel_path": "sample.md", "present": True},
+            )
+            self.assertEqual(response.status_code, 200)
+            self.assertTrue(response.json["present"])
+        self.assertEqual(
+            len(self.app.team_store.collection_items_for_user(collection_id, user_id=self.admin.id)),
+            1,
+        )
+
+    def test_star_lazily_creates_default_and_collection_param_round_trips(self) -> None:
+        response = self.client.post(
+            "/collections/toggle",
+            data={
+                "rel_path": "sample.md",
+                "folder": "",
+                "q": "",
+                "sort": "date_desc",
+                "tab": "source",
+                "collection": "all",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("collection=all", response.location)
+        groups = self.app.team_store.list_collections_for_user(self.admin.id)
+        self.assertEqual(len(groups["personal"]), 1)
+        self.assertTrue(groups["personal"][0].is_default)
+
+    def test_team_creator_management_is_enforced_by_routes(self) -> None:
+        team_id = self.app.team_store.create_collection(
+            owner_type="team", user_id=self.admin.id, name="Shared"
+        )
+        member = self.app.team_store.create_user("member", "Member", "password123", "member")
+        self.login(member)
+        add = self.client.post(
+            "/collections/toggle",
+            json={"collection_id": team_id, "rel_path": "sample.md", "present": True},
+        )
+        self.assertEqual(add.status_code, 200)
+        rename = self.client.post(f"/collections/{team_id}/rename", data={"name": "Hijack"})
+        self.assertEqual(rename.status_code, 403)
+
+    def test_digest_uses_default_model_and_persists_result(self) -> None:
+        collection_id = self.app.team_store.create_collection(
+            owner_type="user", user_id=self.admin.id, name="Digest me"
+        )
+        self.app.team_store.set_collection_membership(
+            collection_id=collection_id,
+            rel_path="sample.md",
+            user_id=self.admin.id,
+            present=True,
+        )
+        fake_client = SimpleNamespace(complete=lambda messages, **kwargs: "## 条目\n- Sample\n\n## 综合判断\n很好")
+        with patch("src.paper_reader.app.get_llm_client", return_value=fake_client) as mocked:
+            response = self.client.post(f"/collections/{collection_id}/digest/generate")
+        self.assertEqual(response.status_code, 302)
+        mocked.assert_called_once()
+        saved = self.app.team_store.collection_for_user(collection_id, self.admin.id)
+        self.assertIn("综合判断", saved.digest_markdown or "")
+        page = self.client.get(f"/?collection={collection_id}")
+        self.assertEqual(page.status_code, 200)
+
+    def test_csrf_protects_collection_mutations(self) -> None:
+        self.app.config["CSRF_PROTECTION_ENABLED"] = True
+        rejected = self.client.post(
+            "/collections/create", json={"owner_type": "user", "name": "No token"}
+        )
+        self.assertEqual(rejected.status_code, 403)
+        with self.client.session_transaction() as session:
+            session["csrf_token"] = "collection-csrf"
+        accepted = self.client.post(
+            "/collections/create",
+            json={"owner_type": "user", "name": "Token"},
+            headers={"X-CSRFToken": "collection-csrf"},
+        )
+        self.assertEqual(accepted.status_code, 201)
 
 
 if __name__ == "__main__":

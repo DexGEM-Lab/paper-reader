@@ -2086,8 +2086,14 @@ def redirect_to_index(
     *,
     show_done: bool = False,
     batch_show_done: bool = False,
+    collection: str | None = None,
 ) -> Any:
     params = {"folder": current_folder, "q": query, "sort": sort_by}
+    active_collection = collection
+    if active_collection is None and request:
+        active_collection = request.values.get("collection", "").strip()
+    if active_collection:
+        params["collection"] = active_collection
     if selected_paper:
         params["paper"] = selected_paper
     if tab:
@@ -3750,9 +3756,54 @@ def create_app(
         batch_page = parse_page(request.args.get("batch_page"))
         selected_rel_path = request.args.get("paper", "").strip("/")
         selected_tab = request.args.get("tab", "source")
+        raw_collection = request.args.get("collection", "").strip()
+        active_collection: str | None = None
+        if raw_collection == "all":
+            active_collection = "all"
+        elif raw_collection.isdigit() and int(raw_collection) > 0:
+            active_collection = raw_collection
 
         scan = app.library.scan()  # type: ignore[attr-defined]
         app.team_store.sync_papers(scan.papers)  # type: ignore[attr-defined]
+        scanned_rel_paths = {paper.rel_path for paper in scan.papers}
+        actor_id = current_user_id()
+        collection_groups = (
+            app.team_store.list_collections_for_user(actor_id, scanned_rel_paths=scanned_rel_paths)  # type: ignore[attr-defined]
+            if actor_id is not None
+            else {"personal": [], "team": []}
+        )
+        selected_collection = None
+        collection_items: list[dict[str, Any]] = []
+        collection_all_count = (
+            len(
+                app.team_store.collection_items_for_user(  # type: ignore[attr-defined]
+                    "all", user_id=actor_id, scanned_rel_paths=scanned_rel_paths
+                )
+            )
+            if actor_id is not None
+            else 0
+        )
+        if active_collection is not None and actor_id is not None:
+            try:
+                if active_collection != "all":
+                    target_id = int(active_collection)
+                    selected_collection = next(
+                        (
+                            item
+                            for item in [*collection_groups["personal"], *collection_groups["team"]]
+                            if item.id == target_id
+                        ),
+                        None,
+                    )
+                    if selected_collection is None:
+                        raise PermissionError("无权查看这个收藏夹。")
+                collection_items = app.team_store.collection_items_for_user(  # type: ignore[attr-defined]
+                    active_collection, user_id=actor_id, scanned_rel_paths=scanned_rel_paths
+                )
+            except (FileNotFoundError, PermissionError, ValueError):
+                active_collection = None
+                selected_collection = None
+                collection_items = []
         papers_with_user_state = apply_user_done_state(scan.papers)
         all_prompts = app.prompt_store.list_prompts()  # type: ignore[attr-defined]
         active_prompts = [prompt for prompt in all_prompts if prompt.enabled]
@@ -3760,12 +3811,16 @@ def create_app(
 
         papers = filter_and_sort_papers(
             papers_with_user_state,
-            folder=folder,
+            folder=folder if active_collection is None else "",
             query=query,
             sort_by=sort_by,
-            show_done=show_done,
+            show_done=(show_done or active_collection is not None),
             metadata_matches=metadata_matches,
         )
+        if active_collection is not None:
+            collection_order = {item["rel_path"]: index for index, item in enumerate(collection_items)}
+            papers = [paper for paper in papers if paper.rel_path in collection_order]
+            papers.sort(key=lambda paper: collection_order[paper.rel_path])
         batch_papers = filter_and_sort_papers(
             papers_with_user_state,
             folder=folder,
@@ -3806,6 +3861,11 @@ def create_app(
             "batch_page": batch_page,
             "selected_rel_path": selected_rel_path,
             "selected_tab": selected_tab,
+            "active_collection": active_collection,
+            "selected_collection": selected_collection,
+            "collection_groups": collection_groups,
+            "collection_items": collection_items,
+            "collection_all_count": collection_all_count,
             "papers": papers,
             "batch_papers": batch_papers,
             "batch_library_total": len(batch_library_papers),
@@ -3825,6 +3885,9 @@ def create_app(
         batch_show_done = state["batch_show_done"]
         batch_page = state["batch_page"]
         selected_tab = state["selected_tab"]
+        active_collection = state["active_collection"]
+        selected_collection = state["selected_collection"]
+        collection_groups = state["collection_groups"]
         papers = state["papers"]
         batch_papers = state["batch_papers"]
         sidebar_groups = state["sidebar_groups"]
@@ -3839,6 +3902,8 @@ def create_app(
         selected_share_payload: dict[str, str] | None = None
         selected_web_html: Markup | None = None
         selected_screening: dict[str, str] | None = None
+        collection_digest_html: Markup | None = None
+        selected_collection_memberships: list[Any] = []
         viewer_tabs: list[dict[str, Any]] = []
         selected_arxiv_markdown_status: dict[str, Any] = {
             "available": False,
@@ -3870,8 +3935,22 @@ def create_app(
             "private": {"messages": [], "count": 0, "visibility": "private"},
         }
 
+        if selected_collection and selected_collection.digest_markdown:
+            collection_digest_html = Markup(render_markdown(selected_collection.digest_markdown))
+
         if selected_paper:
             selected_share_payload = share_payload_for_paper(selected_paper)
+            actor_id = current_user_id()
+            if actor_id is not None:
+                selected_collection_memberships = app.team_store.collection_memberships_for_paper(  # type: ignore[attr-defined]
+                    rel_path=selected_paper.rel_path, user_id=actor_id
+                )
+                if active_collection is not None:
+                    app.team_store.record_collection_event(  # type: ignore[attr-defined]
+                        user_id=actor_id,
+                        collection_id=(int(active_collection) if active_collection != "all" else None),
+                        rel_path=selected_paper.rel_path,
+                    )
             if selected_paper.preview_text:
                 preview_paragraphs = [chunk.strip() for chunk in selected_paper.preview_text.split("\n\n") if chunk.strip()]
             if selected_paper.preview_kind in {"web", "markdown"}:
@@ -3944,6 +4023,8 @@ def create_app(
             }
             if show_done:
                 paper_url_params["show_done"] = "1"
+            if active_collection is not None:
+                paper_url_params["collection"] = active_collection
             recommendation_feed.append(
                 {
                     **item,
@@ -3979,6 +4060,12 @@ def create_app(
             selected_arxiv_markdown_status=selected_arxiv_markdown_status,
             selected_paper_context=selected_paper_context,
             selected_chat_context=selected_chat_context,
+            active_collection=active_collection,
+            selected_collection=selected_collection,
+            collection_groups=collection_groups,
+            collection_total_count=state["collection_all_count"],
+            collection_digest_html=collection_digest_html,
+            selected_collection_memberships=selected_collection_memberships,
             recommendation_feed=recommendation_feed,
             active_prompts=active_prompts,
             active_prompt_count=len(active_prompts),
@@ -4046,6 +4133,214 @@ def create_app(
             )
 
         abort(404)
+
+    def collection_request_data() -> dict[str, Any]:
+        payload = request.get_json(silent=True)
+        return payload if isinstance(payload, dict) else request.form.to_dict()
+
+    def collection_redirect(*, selected_paper: str | None = None, collection: str | None = None) -> Any:
+        return redirect_to_index(
+            request.values.get("folder", ""),
+            request.values.get("q", ""),
+            request.values.get("sort", "date_desc"),
+            selected_paper or request.values.get("paper", "") or None,
+            request.values.get("tab", "source"),
+            show_done=parse_checkbox(request.values.get("show_done")),
+            collection=collection,
+        )
+
+    @app.post("/collections/create")
+    def collection_create_route() -> Any:
+        actor = current_user()
+        if actor is None:
+            abort(401)
+        data = collection_request_data()
+        owner_type = str(data.get("owner_type") or "user").strip()
+        try:
+            collection_id = app.team_store.create_collection(  # type: ignore[attr-defined]
+                owner_type=owner_type, user_id=actor.id, name=str(data.get("name") or "")
+            )
+            collection = app.team_store.collection_for_user(collection_id, actor.id)  # type: ignore[attr-defined]
+        except ValueError as exc:
+            if request.is_json or request.accept_mimetypes.best == "application/json":
+                return {"status": "error", "message": str(exc)}, 400
+            flash(str(exc), "error")
+            return collection_redirect()
+        if request.is_json or request.accept_mimetypes.best == "application/json":
+            return {"status": "created", "collection": asdict(collection)}, 201
+        flash(f"已经新建收藏夹：{collection.name}", "success")
+        return collection_redirect(collection=str(collection.id))
+
+    @app.post("/collections/toggle")
+    def collection_toggle_route() -> Any:
+        actor = current_user()
+        if actor is None:
+            abort(401)
+        data = collection_request_data()
+        rel_path = str(data.get("rel_path") or "").strip("/")
+        if not rel_path:
+            return {"status": "error", "message": "缺少论文路径。"}, 400
+        try:
+            ensure_paper_metadata(rel_path)
+            raw_collection_id = str(data.get("collection_id") or "").strip()
+            if raw_collection_id:
+                collection_id = int(raw_collection_id)
+                raw_present = data.get("present")
+                if raw_present is None or str(raw_present).strip() == "":
+                    present = app.team_store.toggle_collection_item(  # type: ignore[attr-defined]
+                        collection_id=collection_id, rel_path=rel_path, user_id=actor.id
+                    )
+                else:
+                    desired = raw_present if isinstance(raw_present, bool) else str(raw_present).casefold() in {"1", "true", "yes", "on", "add"}
+                    present = app.team_store.set_collection_membership(  # type: ignore[attr-defined]
+                        collection_id=collection_id,
+                        rel_path=rel_path,
+                        user_id=actor.id,
+                        present=bool(desired),
+                    )
+            else:
+                collection_id, present = app.team_store.toggle_default_collection_item(  # type: ignore[attr-defined]
+                    rel_path=rel_path, user_id=actor.id
+                )
+        except (FileNotFoundError, ValueError) as exc:
+            return {"status": "error", "message": str(exc)}, 400
+        except PermissionError as exc:
+            return {"status": "error", "message": str(exc)}, 403
+
+        memberships = app.team_store.collection_memberships_for_paper(  # type: ignore[attr-defined]
+            rel_path=rel_path, user_id=actor.id
+        )
+        if request.is_json or request.accept_mimetypes.best == "application/json":
+            return {
+                "status": "saved" if present else "removed",
+                "collection_id": collection_id,
+                "present": present,
+                "saved": bool(memberships),
+                "memberships": [asdict(item) for item in memberships],
+            }
+        flash("已加入收藏夹。" if present else "已从收藏夹移出，可立即撤销。", "success")
+        active = str(data.get("collection") or "").strip() or None
+        selected = rel_path if present or active is None else None
+        return collection_redirect(selected_paper=selected, collection=active)
+
+    @app.post("/collections/<int:collection_id>/rename")
+    def collection_rename_route(collection_id: int) -> Any:
+        actor = current_user()
+        if actor is None:
+            abort(401)
+        try:
+            app.team_store.rename_collection(  # type: ignore[attr-defined]
+                collection_id,
+                user_id=actor.id,
+                name=request.form.get("name", ""),
+                is_admin=actor.role == "admin",
+            )
+        except PermissionError:
+            abort(403)
+        except (FileNotFoundError, ValueError) as exc:
+            flash(str(exc), "error")
+        else:
+            flash("收藏夹已重命名。", "success")
+        return collection_redirect(collection=str(collection_id))
+
+    @app.post("/collections/<int:collection_id>/reorder")
+    def collection_reorder_route(collection_id: int) -> Any:
+        actor = current_user()
+        if actor is None:
+            abort(401)
+        try:
+            app.team_store.reorder_collection(  # type: ignore[attr-defined]
+                collection_id,
+                user_id=actor.id,
+                direction=request.form.get("direction", ""),
+                is_admin=actor.role == "admin",
+            )
+        except PermissionError:
+            abort(403)
+        except (FileNotFoundError, ValueError) as exc:
+            flash(str(exc), "error")
+        return collection_redirect(collection=str(collection_id))
+
+    @app.post("/collections/<int:collection_id>/delete")
+    def collection_delete_route(collection_id: int) -> Any:
+        actor = current_user()
+        if actor is None:
+            abort(401)
+        try:
+            app.team_store.delete_collection(  # type: ignore[attr-defined]
+                collection_id, user_id=actor.id, is_admin=actor.role == "admin"
+            )
+        except PermissionError:
+            abort(403)
+        except (FileNotFoundError, ValueError) as exc:
+            flash(str(exc), "error")
+            return collection_redirect(collection=str(collection_id))
+        flash("收藏夹已删除，夹内论文仍保留在书库。", "success")
+        return collection_redirect(collection="all")
+
+    @app.post("/collections/<int:collection_id>/digest/generate")
+    def collection_digest_generate_route(collection_id: int) -> Any:
+        actor = current_user()
+        if actor is None:
+            abort(401)
+        try:
+            collection = app.team_store.collection_for_user(collection_id, actor.id)  # type: ignore[attr-defined]
+        except (FileNotFoundError, PermissionError):
+            abort(403)
+        if not collection.can_manage:
+            abort(403)
+
+        scan = app.library.scan()  # type: ignore[attr-defined]
+        app.team_store.sync_papers(scan.papers)  # type: ignore[attr-defined]
+        paper_by_path = {paper.rel_path: paper for paper in scan.papers}
+        item_rows = app.team_store.collection_items_for_user(  # type: ignore[attr-defined]
+            collection_id,
+            user_id=actor.id,
+            scanned_rel_paths=set(paper_by_path),
+        )[:30]
+        if not item_rows:
+            flash("空收藏夹暂时无法生成摘要。", "error")
+            return collection_redirect(collection=str(collection_id))
+
+        digest_inputs: list[dict[str, str]] = []
+        for item in item_rows:
+            paper = paper_by_path[item["rel_path"]]
+            brief = app.library.read_prompt_result(paper.rel_path, DEFAULT_PROMPT_SLUG) or paper.preview_text or "暂无摘要。"  # type: ignore[attr-defined]
+            digest_inputs.append(
+                {
+                    "title": paper.display_title[:300],
+                    "brief": re.sub(r"\s+", " ", brief).strip()[:1400],
+                }
+            )
+        prompt = (
+            "你是 DexGEM Lab 的研究编辑。请为收藏夹《"
+            + collection.name
+            + "》生成中文 Markdown 摘要。必须包含：\n"
+            "1. `## 条目`：完整标题列表；\n"
+            "2. `## 逐篇简报`：按主题分组，每篇恰好一个简洁段落，保留方法、结论和局限；\n"
+            "3. `## 综合判断`：总结共同主题、互补关系、矛盾与下一步阅读建议。\n"
+            "不要编造输入之外的信息，不要省略任何输入条目。\n\n输入（最多 30 篇，按最近收藏排序）：\n"
+            + json.dumps(digest_inputs, ensure_ascii=False, separators=(",", ":"))
+        )
+        try:
+            digest = get_llm_client(runtime_config).complete(
+                [{"role": "user", "content": prompt}],
+                model=runtime_config.llm_model,
+                session_id=f"paper-reader-collection-digest-{collection_id}",
+            )
+            app.team_store.save_collection_digest(  # type: ignore[attr-defined]
+                collection_id,
+                user_id=actor.id,
+                markdown=digest,
+                item_count=len(item_rows),
+                is_admin=actor.role == "admin",
+            )
+        except Exception as exc:
+            LOGGER.exception("Collection digest generation failed for %s", collection_id)
+            flash(f"摘要生成失败：{exc}", "error")
+        else:
+            flash(f"已为 {len(item_rows)} 篇条目生成收藏夹摘要。", "success")
+        return collection_redirect(collection=str(collection_id))
 
     @app.post("/upload")
     def upload() -> Any:
