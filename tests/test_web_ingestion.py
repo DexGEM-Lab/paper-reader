@@ -587,6 +587,16 @@ class WebImportIntegrationTests(unittest.TestCase):
                 self.assertIsNone(self.app.team_store.find_paper_by_source("canonical_url", url))
         self.assertEqual(list(self.library.rglob("*.md")), [])
 
+    def test_redirect_to_own_github_is_rejected_before_team_record_creation(self) -> None:
+        url = "https://example.com/redirect"
+        response = fetched(ARTICLE_HTML, url="https://github.com/DexGEM-Lab/private-project")
+        result = self.run_import(url, response=response)
+        item = result["items"][0]
+        self.assertEqual(item["status"], "failed")
+        self.assertIn("自有 GitHub", item["message"])
+        self.assertIsNone(self.app.team_store.find_paper_by_source("canonical_url", url))
+        self.assertEqual(list(self.library.rglob("*.md")), [])
+
     def test_web_import_creates_snapshot_team_record_and_reader_view(self) -> None:
         url = "https://example.com/research/system?utm_source=feishu"
         provenance = [

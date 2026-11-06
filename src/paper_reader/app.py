@@ -3106,6 +3106,8 @@ def create_app(
                             fetch_status=snapshot.fetch_status,
                         )
                         forced_reason = mandatory_drop_reason(packet)
+                        if not forced_reason and snapshot.final_url:
+                            forced_reason = internal_link_reason(replace(packet, url=snapshot.final_url))
                         if forced_reason:
                             app.library.web_resources.delete_snapshot(rel_path)  # type: ignore[attr-defined]
                             if item.get("refresh"):
