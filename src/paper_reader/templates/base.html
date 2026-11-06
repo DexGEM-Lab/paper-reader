@@ -30,7 +30,7 @@
     <div class="page-shell">
       <header class="hero hero-compact topbar">
         <div class="hero-brand">
-          <img class="app-logo" src="{{ url_for('static', filename='brand/dexgem-wordmark.svg') }}" alt="DexGEM" width="132">
+          <img class="app-logo" src="{{ url_for('static', filename='brand/dexgem-wordmark.svg', v=2) }}" alt="DexGEM" width="132">
           <div>
             <p class="eyebrow">Research Reader</p>
             {% if session.get("user_id") %}<h1><a href="{{ url_for('index') }}">论文阅读器</a></h1>{% else %}<h1>论文阅读器</h1>{% endif %}
