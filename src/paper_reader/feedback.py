@@ -156,7 +156,14 @@ class FeedbackAgent:
             category = result['category']
             if category in {'bug', 'feature_request'}:
                 prefix = 'ISSUE' if category == 'bug' else 'FR'
-                count = db.execute('SELECT COUNT(*) FROM issues WHERE category=?', (category,)).fetchone()[0] + 1
+                # Allocate from the max numeric suffix, not row count: deleted
+                # records (misclassified/merged) must never make ids go backwards
+                # or collide with previously announced numbers.
+                cut = len(prefix) + 2
+                count = db.execute(
+                    "SELECT COALESCE(MAX(CAST(SUBSTR(issue, ?) AS INTEGER)), 0) + 1 FROM issues WHERE issue GLOB ?",
+                    (cut, prefix + '-[0-9]*'),
+                ).fetchone()[0]
                 issue, stamp = f'{prefix}-{count:03d}', now()
                 status = 'fixing' if category == 'bug' else 'evaluating'
                 db.execute('INSERT INTO issues VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
