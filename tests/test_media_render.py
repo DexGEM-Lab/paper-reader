@@ -67,3 +67,10 @@ def test_nested_video_poster_does_not_become_double_nested():
     result = _rewrite_inline_media('[![clip](https://example.com/p.png)](https://example.com/a.mp4)', assets=assets, videos=videos)
     assert result == '[![clip](/files/p.png)](/files/a.mp4)'
     assert '<video' in render_markdown(result)
+
+
+def test_video_missing_from_extracted_body_is_preserved():
+    videos = [{'url': 'https://example.com/a.mp4', 'local_url': '/files/a.mp4', 'title': 'clip', 'kind': 'video'}]
+    content = _rewrite_inline_media('Article body', assets=[], videos=videos)
+    assert '[▶ clip](/files/a.mp4)' in content
+    assert '<video' in render_markdown(content)

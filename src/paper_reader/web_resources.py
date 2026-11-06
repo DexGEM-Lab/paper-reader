@@ -825,6 +825,13 @@ def _rewrite_inline_media(
     for video in videos:
         if video.get("local_url"):
             rewritten = rewritten.replace(f"]({video['url']})", f"]({video['local_url']})")
+    missing_videos = [video for video in videos
+                      if video.get("kind") == "video"
+                      and (video.get("local_url") or video.get("url"))
+                      and (video.get("local_url") or video["url"]) not in rewritten]
+    if missing_videos:
+        links = [f"[▶ {_clean_label(video.get('title')) or 'Video'}]({video.get('local_url') or video['url']})" for video in missing_videos]
+        rewritten = "\n\n".join([rewritten, "## Videos", *links])
     hero_lines = [
         f"![{_clean_label(asset.get('alt')) or 'Hero image'}]({asset['local_url']})"
         for asset in assets
