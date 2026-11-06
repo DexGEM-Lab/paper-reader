@@ -15,6 +15,12 @@ auto-approves runtime ≤1w and DMs the new key to the requester. Install into
 `/etc/paper-reader/s3-backup.env` on the VPS. Long-term fix: ask the storage platform
 owners for a durable service account.
 
+## Reader UI regression checks
+
+Source documents and their trailing attachment list must share the `.reader-stage-source` scroller. Keep text and attachment sections in normal flow; shrinking both as flex children clips attachment links. PDF frames retain a full-stage height, with attachments reachable below them. `tests/test_attachment_scroll.py` checks real wheel input at desktop, reduced-height, and mobile viewports (requires optional `agent-browser` and Chromium).
+
+When changing a static asset, increment its `v=` URL in `templates/base.html` in the same commit so Cloudflare/browser caches cannot conceal the deployed fix.
+
 ## Feedback agent
 
 Set `PAPER_READER_FEISHU_FEEDBACK_CHAT_IDS` to comma-separated feedback group IDs and `PAPER_READER_INTERNAL_TOKEN` to a strong secret in the root-only app environment. Feedback chats also feed normal link import. The worker persists inbound messages, issue changes and outgoing threaded replies under the data library directory; transient model/API errors are retried. Gunicorn currently runs one worker, which is required for one feedback dispatcher.

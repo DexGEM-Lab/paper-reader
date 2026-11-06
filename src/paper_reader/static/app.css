@@ -1272,9 +1272,21 @@ main {
   background: var(--paper);
 }
 
-/* ISSUE-005: text snapshots must not create a second inner scrollbar. The
-   article grows naturally and the center pane provides the single scroll
-   context, so zoomed/small viewports keep the full content reachable. */
+/* Source content and its trailing attachments share one scroll context.
+   A flex column with overflow:hidden shrank the attachment box and clipped
+   its links; scrolling the document could never reveal those siblings. Keep
+   source children in normal flow, including a viewport-sized PDF viewer. */
+.reader-stage-source {
+  display: block;
+  overflow-y: auto;
+}
+
+.reader-stage-source > .source-text-viewer {
+  overflow: visible;
+}
+
+/* ISSUE-005: text snapshots grow naturally inside the source stage instead
+   of creating a second inner scrollbar at small/zoomed viewports. */
 .source-text-viewer.source-viewer {
   height: auto;
   min-height: 0;

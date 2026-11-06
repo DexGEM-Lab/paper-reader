@@ -627,7 +627,7 @@
         </dialog>
       {% endif %}
 
-      <div class="reader-stage" data-center-stage>
+      <div class="reader-stage{% if selected_tab == 'source' %} reader-stage-source{% endif %}" data-center-stage>
         {% if selected_tab == 'source' %}
           {% if selected_paper.preview_kind in ['web', 'markdown'] %}
             <div class="source-viewer source-text-viewer" data-reader-fullscreen="source-viewer">
