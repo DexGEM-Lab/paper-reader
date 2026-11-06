@@ -266,6 +266,49 @@ class CollectionRouteTests(unittest.TestCase):
         self.assertIn("综合判断", saved.digest_markdown or "")
         page = self.client.get(f"/?collection={collection_id}")
         self.assertEqual(page.status_code, 200)
+        html = page.get_data(as_text=True)
+        self.assertIn("collection-digest-panel", html)
+        self.assertIn("综合判断", html)
+        self.assertIn("重新生成", html)
+
+    def test_sidebar_sheet_chips_flat_rows_and_undo_render(self) -> None:
+        personal = self.app.team_store.create_collection(
+            owner_type="user", user_id=self.admin.id, name="Reading"
+        )
+        team = self.app.team_store.create_collection(
+            owner_type="team", user_id=self.admin.id, name="Lab picks"
+        )
+        for collection_id in (personal, team):
+            self.app.team_store.set_collection_membership(
+                collection_id=collection_id,
+                rel_path="sample.md",
+                user_id=self.admin.id,
+                present=True,
+            )
+        response = self.client.get(f"/?collection={personal}&paper=sample.md")
+        html = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('data-sidebar-switch="collections"', html)
+        self.assertIn('data-sidebar-panel="collections"', html)
+        self.assertIn("paper-row-managed", html)
+        self.assertIn("collection-membership-sheet", html)
+        self.assertIn("★ Reading", html)
+        self.assertIn("★ Lab picks", html)
+        self.assertIn(f'name="collection" value="{personal}"', html)
+
+        removed = self.client.post(
+            "/collections/toggle",
+            data={
+                "collection_id": personal,
+                "collection": personal,
+                "rel_path": "sample.md",
+                "present": "0",
+            },
+            follow_redirects=True,
+        )
+        removed_html = removed.get_data(as_text=True)
+        self.assertIn("撤销", removed_html)
+        self.assertIn('name="present" value="1"', removed_html)
 
     def test_csrf_protects_collection_mutations(self) -> None:
         self.app.config["CSRF_PROTECTION_ENABLED"] = True

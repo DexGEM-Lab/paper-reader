@@ -4218,8 +4218,28 @@ def create_app(
                 "saved": bool(memberships),
                 "memberships": [asdict(item) for item in memberships],
             }
-        flash("已加入收藏夹。" if present else "已从收藏夹移出，可立即撤销。", "success")
         active = str(data.get("collection") or "").strip() or None
+        if present:
+            flash("已加入收藏夹。", "success")
+        else:
+            flash(
+                Markup(
+                    '已从收藏夹移出。<form class="flash-undo-form" action="{}" method="post">'
+                    '<input type="hidden" name="csrf_token" value="{}">'
+                    '<input type="hidden" name="collection_id" value="{}">'
+                    '<input type="hidden" name="collection" value="{}">'
+                    '<input type="hidden" name="rel_path" value="{}">'
+                    '<input type="hidden" name="present" value="1">'
+                    '<button type="submit">撤销</button></form>'
+                ).format(
+                    url_for("collection_toggle_route"),
+                    csrf_token(),
+                    collection_id,
+                    active or "",
+                    rel_path,
+                ),
+                "success",
+            )
         selected = rel_path if present or active is None else None
         return collection_redirect(selected_paper=selected, collection=active)
 
