@@ -2130,6 +2130,13 @@ table {
     border-left: var(--border-strong);
   }
 
+  /* ISSUE-005: when the discussion drawer is open, push the reading pane's
+     content into the remaining width instead of letting it clip underneath —
+     otherwise at browser zoom the drawer physically covers most of the text. */
+  .workspace-shell.tri-workspace:not(.right-collapsed) .pane-center {
+    margin-right: min(400px, 94vw);
+  }
+
   /* Fullscreen chat must escape the fixed drawer overlay. */
   body.assistant-expanded .workspace-shell.tri-workspace .pane-right {
     position: relative;
