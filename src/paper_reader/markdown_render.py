@@ -24,10 +24,11 @@ _SNAPSHOT_METADATA_RE = re.compile(
     r"^\**\s*(?:author|authors|published|site|original|source|来源|作者|站点)\s*[:：]",
     re.IGNORECASE,
 )
+_TITLE_SITE_SUFFIX_RE = re.compile(r"\s+[|｜/·•–—-]\s+")
 _ANSWER_WRAPPER_LINES = {"<answer>", "</answer>"}
 _MATH_BLOCK_DELIMITERS = {"$$": "$$", r"\[": r"\]"}
 _PLACEHOLDER_TEMPLATE = "%%MDPH{index}%%"
-_MAX_LEADING_BLOCKS = 6
+_MAX_LEADING_BLOCKS = 8
 
 
 def strip_duplicate_snapshot_header(markdown: str, title: str) -> str:
@@ -46,15 +47,14 @@ def strip_duplicate_snapshot_header(markdown: str, title: str) -> str:
 
         <content>
 
-    and page/main content frequently repeats the title as its own leading H1.
-    The reading view already renders the item title, source and date, so the
-    leading copy is noise. This strips a leading duplicate H1, the synthetic
-    metadata block that directly follows it, an optional ``---`` separator, and
-    further leading H1s that repeat the same title. Only title duplicates and
-    the known synthetic metadata prefix are removed; body content is preserved.
+    and page/main content frequently repeats the title as its own leading H1
+    (pages also carry a ``| Site`` suffix in their ``<title>``, and nav or hero
+    media can precede the heading). The reading view already renders the item
+    title, source and date, so the leading copy is noise. This drops title
+    duplicate H1s and the synthetic metadata block, and nothing else: body
+    content, leading hero images and unrelated headings are preserved.
     """
-    title_key = _title_key(title)
-    if not markdown or not title_key:
+    if not markdown or not _title_key(title):
         return markdown
     lines = markdown.splitlines()
     total = len(lines)
@@ -64,8 +64,7 @@ def strip_duplicate_snapshot_header(markdown: str, title: str) -> str:
     drop: set[int] = set()
     cursor = 0
     blocks_scanned = 0
-    saw_title = False
-    saw_metadata = False
+    previous_dropped: str | None = None
     while cursor < total and blocks_scanned < _MAX_LEADING_BLOCKS:
         while cursor < total and not lines[cursor].strip():
             cursor += 1
@@ -76,22 +75,23 @@ def strip_duplicate_snapshot_header(markdown: str, title: str) -> str:
             cursor += 1
         block = [lines[index].strip() for index in range(start, cursor)]
         blocks_scanned += 1
-        if len(block) == 1 and _is_title_heading(block[0], title_key):
+        if len(block) == 1 and _is_title_heading(block[0], title):
             drop.update(range(start, cursor))
-            saw_title = True
+            previous_dropped = "title"
             continue
-        if saw_title and all(_SNAPSHOT_METADATA_RE.match(item) for item in block):
+        if previous_dropped in {"title", "metadata"} and all(
+            _SNAPSHOT_METADATA_RE.match(item) for item in block
+        ):
             drop.update(range(start, cursor))
-            saw_metadata = True
+            previous_dropped = "metadata"
             continue
-        if saw_metadata and len(block) == 1 and _RULE_RE.match(block[0]):
+        if previous_dropped == "metadata" and len(block) == 1 and _RULE_RE.match(block[0]):
             drop.update(range(start, cursor))
+            previous_dropped = "rule"
             continue
-        if all(_is_media_line(item) for item in block):
-            # Leading hero/media blocks are real content; keep them and keep
-            # looking for the duplicate title heading just beneath.
-            continue
-        break
+        # Unrelated content (nav text, stats, body) is kept, but scanning
+        # continues so a duplicate heading further down the header still goes.
+        previous_dropped = None
 
     if not drop:
         return markdown
@@ -108,15 +108,17 @@ def _title_key(value: str) -> str:
     return re.sub(r"\s+", " ", (value or "")).strip().strip("*_`").casefold()
 
 
-def _is_title_heading(text: str, title_key: str) -> bool:
+def _is_title_heading(text: str, title: str) -> bool:
     match = _HEADING_RE.match(text)
     if match is None or len(match.group(1)) != 1:
         return False
-    return _title_key(match.group(2)) == title_key
-
-
-def _is_media_line(text: str) -> bool:
-    return text.startswith("![") or text.startswith("[![") or text.startswith("[▶")
+    heading_key = _title_key(match.group(2))
+    if not heading_key:
+        return False
+    if heading_key == _title_key(title):
+        return True
+    # ``<title> | Site`` is a browser-tab suffix, not a distinct title.
+    return heading_key == _title_key(_TITLE_SITE_SUFFIX_RE.split(title, maxsplit=1)[0])
 
 
 def render_markdown(text: str) -> str:

@@ -300,6 +300,36 @@ class SnapshotHeaderTests(unittest.TestCase):
         self.assertNotIn("# Visual research project", stripped)
         self.assertIn("documents its research method", stripped)
 
+    def test_strips_duplicate_heading_after_nav_or_media_preamble(self) -> None:
+        snapshot = (
+            "Blog\n\n"
+            "# FTP-1: A Generalist Foundation Tactile Policy\n\n"
+            "Across Tactile Sensors for Contact-Rich Manipulation\n"
+        )
+        stripped = strip_duplicate_snapshot_header(
+            snapshot, "FTP-1: A Generalist Foundation Tactile Policy"
+        )
+        self.assertIn("Blog", stripped)
+        self.assertNotIn("# FTP-1", stripped)
+        self.assertIn("Across Tactile Sensors", stripped)
+
+    def test_matches_title_when_browser_tab_carries_a_site_suffix(self) -> None:
+        snapshot = (
+            "![Hero image](/files/Web/hero.jpg)\n\n"
+            "# MolmoAct 2: An open foundation for robots that work in the real world\n\n"
+            "May 5, 2026\n"
+        )
+        stripped = strip_duplicate_snapshot_header(
+            snapshot, "MolmoAct 2: An open foundation for robots that work in the real world | Ai2"
+        )
+        self.assertIn("![Hero image]", stripped)
+        self.assertNotIn("# MolmoAct 2", stripped)
+        self.assertIn("May 5, 2026", stripped)
+
+    def test_keeps_unrelated_later_heading(self) -> None:
+        snapshot = "Topic name\n\nSome body paragraph.\n\n## Abstract\n\nBody.\n"
+        self.assertEqual(strip_duplicate_snapshot_header(snapshot, "Topic name"), snapshot)
+
     def test_matches_title_case_and_whitespace_insensitively(self) -> None:
         snapshot = "#   Mixed   CASE   Title\n\nBody text that must survive.\n"
         stripped = strip_duplicate_snapshot_header(snapshot, "mixed case title")
