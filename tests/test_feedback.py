@@ -118,3 +118,15 @@ def test_watcher_cloudflare_user_agent(tmp_path, monkeypatch):
     monkeypatch.setattr(module, 'urlopen', Mock(return_value=response))
     module.poll('https://example.test', 'token', 0)
     assert module.urlopen.call_args.args[0].get_header('User-agent') == 'curl/8.0.1'
+
+
+def test_feature_resolution_and_question_context(tmp_path, monkeypatch):
+    agent = FeedbackAgent(tmp_path / 'feedback.db', config(tmp_path))
+    agent._client = Mock(sender_name=Mock(return_value='陆逸文'), message_text=Mock(return_value='原始对话'), reply=Mock(return_value='reply'))
+    complete = mock_triage(monkeypatch, 'feature_request')
+    agent.enqueue('feature', 'chat', 'ou_sender', '建议收藏', 'external-parent')
+    agent.process_one()
+    assert '原始对话' in complete.call_args.args[0][0]['content']
+    agent.resolve('FR-001', 'evaluating', '暂时排期评估', '')
+    agent.process_one()
+    assert agent._client.reply.call_args.args[:2] == ('feature', 'FR-001 评估结果：暂时排期评估')
