@@ -1284,6 +1284,18 @@ main {
 .source-viewer .source-viewer-body {
   overflow: visible;
 }
+
+/* ISSUE-019: an <iframe> PDF viewer in the grid's first (auto) row took its
+   intrinsic 150px height instead of filling the reader. PDF containers get a
+   single full-height track and the iframe fills it. */
+.source-viewer:has(> .main-viewer) {
+  grid-template-rows: minmax(0, 1fr);
+}
+.source-viewer > .main-viewer {
+  height: 100%;
+  width: 100%;
+}
+
 .viewer-pane {
   overflow-y: auto;
 }
