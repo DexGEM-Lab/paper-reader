@@ -797,7 +797,8 @@ main {
   align-items: stretch;
   grid-template-columns: minmax(168px, 208px) minmax(0, 1fr);
   gap: 14px;
-  height: clamp(720px, calc(100dvh - 92px), 94dvh);
+  height: calc(100dvh - 92px);
+  min-height: 320px;
 }
 
 .sidebar-pane {
@@ -2626,7 +2627,8 @@ button:disabled,
   --right-resizer-width: 10px;
   grid-template-columns: var(--left-pane-width) var(--left-resizer-width) minmax(0, 1fr) var(--right-resizer-width) var(--right-pane-width);
   gap: 0;
-  height: clamp(720px, calc(100dvh - 112px), 92dvh);
+  height: calc(100dvh - 112px);
+  min-height: 320px;
 }
 .layout-pane {
   min-height: 0;
@@ -4202,7 +4204,8 @@ textarea {
 .workspace-shell.tri-workspace {
   --left-pane-width: 272px;
   --right-pane-width: 376px;
-  height: clamp(720px, calc(100dvh - 108px), 92dvh);
+  height: calc(100dvh - 108px);
+  min-height: 320px;
 }
 
 .layout-pane,
