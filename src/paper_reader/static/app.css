@@ -295,6 +295,14 @@ label span {
   height: clamp(720px, calc(100dvh - 96px), 94dvh);
 }
 
+/* ISSUE-005 root fix: `main` is display:grid with an auto/max-content single
+   track (style.css), so the workspace shell shrank to its content and the 1fr
+   reading track collapsed whenever the evidence pane opened. Force the main
+   track (and the shell inside it) to span the full width. */
+main {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .workspace-shell.tri-workspace {
   --left-pane-width: 288px;
   --right-pane-width: 372px;
