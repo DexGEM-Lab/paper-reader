@@ -51,7 +51,7 @@ from .insights_history import HistoricalInsightsStore, extract_digest
 from .llm import get_llm_client, resolve_model
 from .insights_momentum import MomentumInsightsStore
 from .insights_opportunity import OpportunityInsightsStore
-from .markdown_render import render_markdown
+from .markdown_render import render_markdown, strip_duplicate_snapshot_header
 from .netutils import fetch_public_url
 from .offline_package import build_offline_manifest, manifest_json as build_manifest_json, offline_prompt_arcname, offline_source_arcname
 from .prompt_manager import DEFAULT_PROMPT_SLUG, PromptDefinition, PromptStore, parse_checkbox
@@ -3872,8 +3872,13 @@ def create_app(
             if selected_paper.preview_kind in {"web", "markdown"}:
                 try:
                     snapshot_markdown = app.library.resolve_relative_path(selected_paper.rel_path).read_text(encoding="utf-8")  # type: ignore[attr-defined]
-                    selected_web_html = Markup(render_markdown(snapshot_markdown))
                     web_metadata = app.library.web_resources.metadata_for_rel_path(selected_paper.rel_path) or {}  # type: ignore[attr-defined]
+                    if web_metadata:
+                        snapshot_markdown = strip_duplicate_snapshot_header(
+                            snapshot_markdown,
+                            str(web_metadata.get("title") or selected_paper.display_title or ""),
+                        )
+                    selected_web_html = Markup(render_markdown(snapshot_markdown))
                     raw_screening = web_metadata.get("screening")
                     if isinstance(raw_screening, dict):
                         selected_screening = {

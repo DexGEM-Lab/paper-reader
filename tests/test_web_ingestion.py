@@ -12,7 +12,7 @@ from src.paper_reader.action_queue import ActionRecord
 from src.paper_reader.ai_summary import extract_document_context
 from src.paper_reader.config import load_config
 from src.paper_reader.app import create_app
-from src.paper_reader.markdown_render import render_markdown
+from src.paper_reader.markdown_render import render_markdown, strip_duplicate_snapshot_header
 from src.paper_reader.netutils import (
     DEFAULT_MAX_REDIRECTS,
     FetchedResponse,
@@ -247,6 +247,73 @@ class WebClassificationTests(unittest.TestCase):
             self.assertIsNone(stored["sort_date"])
 
 
+class SnapshotHeaderTests(unittest.TestCase):
+    """Reader-mode snapshots must not repeat the app-level title chrome."""
+
+    def test_strips_synthetic_header_and_duplicate_page_heading(self) -> None:
+        snapshot = (
+            "# Dexterous Robot Learning Project\n\n"
+            "**Author:** Alice Researcher\n"
+            "**Published:** 2026-04-20\n"
+            "**Site:** Example Robotics Lab\n"
+            "**Original:** https://example.com/research/system\n\n"
+            "---\n\n"
+            "# Dexterous Robot Learning Project\n\n"
+            "The project introduces a dexterous manipulation system trained from demonstrations.\n"
+        )
+        stripped = strip_duplicate_snapshot_header(snapshot, "Dexterous Robot Learning Project")
+        self.assertNotIn("---", stripped)
+        self.assertNotIn("**Author:**", stripped)
+        self.assertNotIn("**Original:**", stripped)
+        self.assertNotIn("# ", stripped)
+        self.assertIn("trained from demonstrations", stripped)
+
+    def test_loongforge_github_case_drops_both_title_h1s(self) -> None:
+        snapshot = (
+            "# baidu-baige/LoongForge\n\n"
+            "**Author:** baidu-baige\n"
+            "**Published:** 2026-11-05\n"
+            "**Site:** GitHub\n"
+            "**Original:** https://github.com/baidu-baige/loongforge\n\n"
+            "---\n\n"
+            "# baidu-baige/LoongForge\n\n"
+            "A high-performance framework for training LLMs and VLMs.\n\n"
+            "## README\n\n"
+            "# LoongForge\n\n"
+            "## Architecture\n"
+        )
+        stripped = strip_duplicate_snapshot_header(snapshot, "baidu-baige/LoongForge")
+        self.assertNotIn("baidu-baige/LoongForge", stripped)
+        self.assertIn("A high-performance framework", stripped)
+        # The README's own (non-duplicate) heading is content and stays.
+        self.assertIn("# LoongForge", stripped)
+        self.assertIn("## Architecture", stripped)
+
+    def test_keeps_leading_hero_image_before_duplicate_heading(self) -> None:
+        snapshot = (
+            "![Hero image](/files/Web/example/hero.jpg)\n\n"
+            "# Visual research project\n\n"
+            "This project documents its research method and evaluation protocol.\n"
+        )
+        stripped = strip_duplicate_snapshot_header(snapshot, "Visual research project")
+        self.assertIn("![Hero image](/files/Web/example/hero.jpg)", stripped)
+        self.assertNotIn("# Visual research project", stripped)
+        self.assertIn("documents its research method", stripped)
+
+    def test_matches_title_case_and_whitespace_insensitively(self) -> None:
+        snapshot = "#   Mixed   CASE   Title\n\nBody text that must survive.\n"
+        stripped = strip_duplicate_snapshot_header(snapshot, "mixed case title")
+        self.assertEqual(stripped, "Body text that must survive.")
+
+    def test_leaves_unrelated_heading_and_body_untouched(self) -> None:
+        snapshot = "# A different heading\n\nAuthor: someone\n\nBody.\n"
+        self.assertEqual(strip_duplicate_snapshot_header(snapshot, "Actual title"), snapshot)
+
+    def test_never_returns_empty_for_header_only_snapshot(self) -> None:
+        snapshot = "# Only a title\n"
+        self.assertEqual(strip_duplicate_snapshot_header(snapshot, "Only a title"), snapshot)
+
+
 class RichContentTests(unittest.TestCase):
     def test_media_assets_are_bounded_downloaded_and_rewritten_locally(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -317,7 +384,9 @@ class RichContentTests(unittest.TestCase):
         self.assertLess(markdown.index("Before the demo"), markdown.index(poster))
         self.assertLess(markdown.index(poster), markdown.index("After the demo"))
         self.assertIn("[![Project demo]", markdown)
-        self.assertIn("**Author:** Alice Researcher; Bob Scientist", markdown)
+        self.assertEqual(metadata["author"], "Alice Researcher; Bob Scientist")
+        self.assertNotIn("**Author:**", markdown)
+        self.assertNotIn("**Original:**", markdown)
         self.assertIn("1 Example University · 2 Example Robotics Lab", markdown)
         self.assertNotIn("<sup>", markdown)
         self.assertNotIn("&amp;", markdown)
@@ -456,6 +525,37 @@ class RichContentTests(unittest.TestCase):
         api_calls = [kwargs for url, kwargs in calls if url.startswith("https://api.github.com/")]
         self.assertTrue(api_calls)
         self.assertTrue(all(kwargs["extra_headers"]["Authorization"] == "Bearer test-pat" for kwargs in api_calls))
+
+    def test_github_readme_heading_matching_repo_title_is_demoted(self) -> None:
+        repo_payload = {
+            "full_name": "DexGEM-Lab/robot-project",
+            "description": "Research code for dexterous robot learning.",
+            "default_branch": "main",
+            "owner": {"login": "DexGEM-Lab"},
+        }
+        readme = b"# DexGEM-Lab/robot-project\n\nThe README explains training, evaluation, and benchmarks.\n\n## Setup\n"
+
+        def fake_fetch(url: str, **kwargs):  # noqa: ANN003
+            if url.endswith("/readme"):
+                return fetched(readme, url=url, content_type="text/plain")
+            if url.startswith("https://raw.githubusercontent.com/"):
+                return fetched(b"x" * (41 * 1024), url=url, content_type="image/png")
+            if url == "https://api.github.com/repos/dexgem-lab/robot-project":
+                return fetched(json.dumps(repo_payload).encode(), url=url, content_type="application/json")
+            raise AssertionError(f"unexpected fetch: {url}")
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            store = WebResourceStore(Path(tempdir))
+            with patch("src.paper_reader.web_resources.fetch_public_url", side_effect=fake_fetch):
+                snapshot = store.fetch_and_store(classify_import_target("https://github.com/DexGEM-Lab/robot-project"))
+            markdown = (Path(tempdir) / snapshot.rel_path).read_text(encoding="utf-8")
+
+        self.assertEqual(markdown.splitlines()[0], "# DexGEM-Lab/robot-project")
+        # Demoted, not deleted: the README heading survives at level two and is
+        # reused as the section heading instead of a generic "## README" label.
+        self.assertIn("## DexGEM-Lab/robot-project", markdown)
+        self.assertNotIn("## README\n", markdown)
+        self.assertIn("## Setup", markdown)
 
     def test_attachment_judge_parsing_enforces_three_item_cap(self) -> None:
         candidates = [{"url": f"https://example.com/file-{index}.pdf", "text": f"Paper {index}"} for index in range(5)]
@@ -680,6 +780,14 @@ class WebImportIntegrationTests(unittest.TestCase):
         self.assertEqual(second["items"][0]["rel_path"], first_path)
         self.assertEqual(len(list((self.library / "Web").rglob("*.md"))), 1)
         self.assertIn("Updated research system", (self.library / first_path).read_text(encoding="utf-8"))
+
+    def test_reader_view_does_not_repeat_item_title(self) -> None:
+        result = self.run_import("https://example.com/research/system")
+        rel_path = result["items"][0]["rel_path"]
+        html = self.client.get(f"/?paper={rel_path}&tab=source").get_data(as_text=True)
+        body = html.split('class="markdown-viewer', 1)[1]
+        self.assertNotIn("<h1>", body)
+        self.assertIn("This technical article explains a concrete research system", body)
 
     def test_failed_web_extraction_is_dropped_even_when_screening_is_disabled(self) -> None:
         url = "https://example.com/paywalled"

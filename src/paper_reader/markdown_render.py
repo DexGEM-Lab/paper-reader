@@ -20,9 +20,103 @@ _CODE_LANG_RE = re.compile(r"^[A-Za-z0-9_+#.-]+$")
 _MATH_ENV_BEGIN_RE = re.compile(r"^\\begin\{([A-Za-z*]+)\}$")
 _MATH_ENV_SINGLE_LINE_RE = re.compile(r"^\\begin\{([A-Za-z*]+)\}.*\\end\{\1\}$")
 _TASK_LIST_RE = re.compile(r"^\[( |x|X)\]\s+(.*)$")
+_SNAPSHOT_METADATA_RE = re.compile(
+    r"^\**\s*(?:author|authors|published|site|original|source|来源|作者|站点)\s*[:：]",
+    re.IGNORECASE,
+)
 _ANSWER_WRAPPER_LINES = {"<answer>", "</answer>"}
 _MATH_BLOCK_DELIMITERS = {"$$": "$$", r"\[": r"\]"}
 _PLACEHOLDER_TEMPLATE = "%%MDPH{index}%%"
+_MAX_LEADING_BLOCKS = 6
+
+
+def strip_duplicate_snapshot_header(markdown: str, title: str) -> str:
+    """Remove reader-mode snapshot chrome that duplicates the app-level header.
+
+    Web snapshots used to be persisted as::
+
+        # <title>
+
+        **Author:** ...
+        **Published:** ...
+        **Site:** ...
+        **Original:** ...
+
+        ---
+
+        <content>
+
+    and page/main content frequently repeats the title as its own leading H1.
+    The reading view already renders the item title, source and date, so the
+    leading copy is noise. This strips a leading duplicate H1, the synthetic
+    metadata block that directly follows it, an optional ``---`` separator, and
+    further leading H1s that repeat the same title. Only title duplicates and
+    the known synthetic metadata prefix are removed; body content is preserved.
+    """
+    title_key = _title_key(title)
+    if not markdown or not title_key:
+        return markdown
+    lines = markdown.splitlines()
+    total = len(lines)
+    if total == 0:
+        return markdown
+
+    drop: set[int] = set()
+    cursor = 0
+    blocks_scanned = 0
+    saw_title = False
+    saw_metadata = False
+    while cursor < total and blocks_scanned < _MAX_LEADING_BLOCKS:
+        while cursor < total and not lines[cursor].strip():
+            cursor += 1
+        if cursor >= total:
+            break
+        start = cursor
+        while cursor < total and lines[cursor].strip():
+            cursor += 1
+        block = [lines[index].strip() for index in range(start, cursor)]
+        blocks_scanned += 1
+        if len(block) == 1 and _is_title_heading(block[0], title_key):
+            drop.update(range(start, cursor))
+            saw_title = True
+            continue
+        if saw_title and all(_SNAPSHOT_METADATA_RE.match(item) for item in block):
+            drop.update(range(start, cursor))
+            saw_metadata = True
+            continue
+        if saw_metadata and len(block) == 1 and _RULE_RE.match(block[0]):
+            drop.update(range(start, cursor))
+            continue
+        if all(_is_media_line(item) for item in block):
+            # Leading hero/media blocks are real content; keep them and keep
+            # looking for the duplicate title heading just beneath.
+            continue
+        break
+
+    if not drop:
+        return markdown
+    remaining = [line for index, line in enumerate(lines) if index not in drop]
+    while remaining and not remaining[0].strip():
+        remaining.pop(0)
+    stripped = "\n".join(remaining)
+    if not stripped.strip():
+        return markdown
+    return stripped
+
+
+def _title_key(value: str) -> str:
+    return re.sub(r"\s+", " ", (value or "")).strip().strip("*_`").casefold()
+
+
+def _is_title_heading(text: str, title_key: str) -> bool:
+    match = _HEADING_RE.match(text)
+    if match is None or len(match.group(1)) != 1:
+        return False
+    return _title_key(match.group(2)) == title_key
+
+
+def _is_media_line(text: str) -> bool:
+    return text.startswith("![") or text.startswith("[![") or text.startswith("[▶")
 
 
 def render_markdown(text: str) -> str:

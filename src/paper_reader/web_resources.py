@@ -764,25 +764,16 @@ def _rewrite_inline_media(
     return _sanitize_extracted_markdown(rewritten)
 
 
-def _resource_markdown(
-    *,
-    title: str,
-    metadata: dict[str, object],
-    content: str,
-) -> str:
-    lines = [f"# {title}", ""]
-    author = str(metadata.get("author") or "").strip()
-    published_date = str(metadata.get("published_date") or "").strip()
-    site_name = str(metadata.get("site_name") or "").strip()
-    if author:
-        lines.append(f"**Author:** {author}")
-    if published_date:
-        lines.append(f"**Published:** {published_date}")
-    if site_name:
-        lines.append(f"**Site:** {site_name}")
-    lines.append(f"**Original:** {metadata['canonical_url']}")
-    lines.extend(["", "---", "", content.strip(), ""])
-    return "\n".join(lines)
+def _reader_markdown(*, content: str) -> str:
+    """Return the reader-mode body.
+
+    The snapshot used to prepend a synthetic ``# <title>`` heading and an
+    ``Author/Published/Site/Original`` block followed by a ``---`` rule. That
+    chrome duplicated the item header rendered by the app and now lives only in
+    the sidecar JSON metadata, so the markdown body is just the extracted
+    content.
+    """
+    return content.strip()
 
 
 def _failed_markdown(*, title: str, url: str, status: str, error: str) -> str:
@@ -793,6 +784,30 @@ def _failed_markdown(*, title: str, url: str, status: str, error: str) -> str:
         "The page snapshot could not be extracted. Use **Retry fetch** after the source becomes available.\n\n"
         f"Technical detail: `{error}`\n"
     )
+
+
+def _demote_duplicate_readme_heading(readme: str, *, title: str) -> tuple[str, bool]:
+    """Demote a README H1 that repeats the repository title instead of deleting it.
+
+    Deleting the heading would lose the README's only top-level heading in the
+    raw markdown, so it is demoted to ``##`` and reused as the README section
+    heading. Returns ``(markdown, heading_is_section)``.
+    """
+    lines = readme.splitlines()
+    index = 0
+    while index < len(lines) and not lines[index].strip():
+        index += 1
+    if index >= len(lines):
+        return readme, False
+    match = re.match(r"^#\s+(.*)$", lines[index].strip())
+    if match is None:
+        return readme, False
+    heading_key = re.sub(r"\s+", " ", match.group(1)).strip().casefold()
+    title_key = re.sub(r"\s+", " ", title).strip().casefold()
+    if heading_key != title_key:
+        return readme, False
+    lines[index] = f"## {match.group(1).strip()}"
+    return "\n".join(lines), True
 
 
 def _parse_json_payload(raw: str) -> object:
@@ -965,7 +980,13 @@ class WebResourceStore:
         if readme:
             raw_base = f"https://raw.githubusercontent.com/{quote(owner)}/{quote(repository)}/{quote(default_branch)}/"
             readme, readme_images = _normalize_github_readme_images(readme, base_url=raw_base)
-            lines.extend(["", "## README", "", readme])
+            readme, readme_heading_is_section = _demote_duplicate_readme_heading(readme, title=full_name)
+            if readme_heading_is_section:
+                # The demoted heading now labels the README section, so the
+                # generic ``## README`` label would be redundant.
+                lines.extend(["", readme])
+            else:
+                lines.extend(["", "## README", "", readme])
 
         if mode == "release":
             try:
@@ -1335,7 +1356,7 @@ class WebResourceStore:
                 if key in previous_metadata:
                     metadata[key] = previous_metadata[key]
         markdown = (
-            _resource_markdown(title=title, metadata=metadata, content=content)
+            _reader_markdown(content=content)
             if status == "ok"
             else _failed_markdown(title=title, url=target.canonical_url, status=status, error=error or "unknown error")
         )
