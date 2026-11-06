@@ -250,8 +250,8 @@ def test_mock_pi_subprocess_streams_fixture_and_uses_configured_interface(tmp_pa
     assert "--workdir" in command and command[3].startswith("/workspaces/")
     assert command[command.index("--tools") + 1] == TOOLS
     assert command[command.index("--append-system-prompt") + 1] == CWD_RULE
-    assert "case-sensitive" in CWD_RULE
-    assert "`bash`, not `Bash`" in CWD_RULE
+    assert "`bash` or its equivalent `Bash` alias" in CWD_RULE
+    assert "/opt/paper-reader/bash-alias.mjs" in command
     assert "do not claim that bash is unavailable" in CWD_RULE
     assert "--no-extensions" in command
     assert "--session-dir" in command

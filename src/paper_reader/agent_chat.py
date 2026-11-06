@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from .agent_sandbox import CWD_RULE, SEARCH_EXTENSION, TOOLS, SharedAgentSandbox
+from .agent_sandbox import BASH_ALIAS_EXTENSION, CWD_RULE, SEARCH_EXTENSION, TOOLS, SharedAgentSandbox
 
 
 @dataclass(frozen=True, slots=True)
@@ -413,7 +413,7 @@ class PiAgentChat:
         # Load only the reviewed search plugin, not project-local extensions or
         # the workstation's personal skills/packages. Bash stays fully general.
         pi_args = [
-            "--no-extensions", "-e", SEARCH_EXTENSION,
+            "--no-extensions", "-e", SEARCH_EXTENSION, "-e", BASH_ALIAS_EXTENSION,
             "--no-skills", "--no-prompt-templates", "--no-themes",
             "--tools", TOOLS, "--append-system-prompt", CWD_RULE,
         ]

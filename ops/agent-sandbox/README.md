@@ -25,8 +25,10 @@ constrain general bash. No global firewall flush or Docker restart is needed.
 
 Pi loads the user's `pi-native-search` plugin at the exact configured revision
 `62f26aec446bd87f018680c0fa459add3e0b660c`. Its active tools are explicitly
-`read,bash,edit,write,grep,find,ls,web_search,web_fetch`. Personal/project
-extensions, skills, prompt templates and image generation are not activated.
+`read,bash,Bash,edit,write,grep,find,ls,web_search,web_fetch`. `Bash` is a
+compatibility alias delegated to Pi's own `bash` implementation; both use the
+same cwd, timeout and cancellation behavior. Personal/project extensions,
+skills, prompt templates and image generation are not activated.
 The system prompt and generated AGENTS.md explicitly allow general bash and
 external research and require all agent-created changes to stay inside the
 **initial cwd**, including after `cd` and through symlinks. External sources

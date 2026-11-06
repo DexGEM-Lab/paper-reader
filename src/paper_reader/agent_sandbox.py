@@ -16,10 +16,11 @@ WORKSPACES = Path("/workspaces")
 PI_HOME = Path("/pi-home")
 RUNNER = "/opt/paper-reader/run-turn.py"
 SEARCH_EXTENSION = "/opt/pi-native-search/extensions/index.ts"
-TOOLS = "read,bash,edit,write,grep,find,ls,web_search,web_fetch"
+BASH_ALIAS_EXTENSION = "/opt/paper-reader/bash-alias.mjs"
+TOOLS = "read,bash,Bash,edit,write,grep,find,ls,web_search,web_fetch"
 CWD_RULE = (
-    "Use the exact case-sensitive tool names provided: `bash` (lowercase), `web_search`, and `web_fetch`. "
-    "For shell commands invoke `bash`, not `Bash` or a tool from another environment. "
+    "Use the tools `bash` or its equivalent `Bash` alias for shell commands, `web_search` for search, "
+    "and `web_fetch` to fetch a web page. "
     "If a tool call fails, use the available tool name and report the outcome of the successful retry accurately; "
     "do not claim that bash is unavailable when `bash` succeeded or invent a fallback tool. "
     "Use these tools to complete the user's task. "

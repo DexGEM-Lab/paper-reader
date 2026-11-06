@@ -124,13 +124,16 @@ def test_actual_pi_bash_search_fetch_and_session_resume(sandbox):
     result = backend.run_turn(rel_path="paper.pdf", visibility="shared", user_id=1, display_name="Alice",
                               question="probe tools", session_key="shared:42", on_event=events.append)
     assert "Sandbox tool results" in result
-    assert {e.tool_name for e in events if e.tool_name} == {"bash", "web_search", "web_fetch"}
+    assert {e.tool_name for e in events if e.tool_name} == {"bash", "Bash", "web_search", "web_fetch"}
     assert (cwd / "notes.txt").read_text() == "sandbox scratch\n"
+    assert (cwd / "lowercase.txt").read_text() == "lowercase works\n"
     assert source.read_bytes() == b"paper evidence"
     files = list((backend.session_root_for("shared:42") / "sessions").rglob("*.jsonl"))
     assert len(files) == 1
     rows = [json.loads(line) for line in files[0].read_text().splitlines()]
     tools = {row["message"]["toolName"]: row["message"] for row in rows if row.get("message", {}).get("role") == "toolResult"}
+    assert not tools["Bash"].get("isError")
+    assert not tools["bash"].get("isError")
     assert "Example Domain" in json.dumps(tools["web_fetch"])
     search = tools["web_search"]
     search_text = json.dumps(search)

@@ -13,7 +13,7 @@ RUN git clone https://github.com/yiwenlu66/pi-native-search.git /opt/pi-native-s
     && ln -s /opt/search-deps/node_modules /opt/pi-native-search/node_modules \
     && rm -rf /opt/pi-native-search/.git
 
-COPY run-turn.py probe-search.mjs /opt/paper-reader/
+COPY run-turn.py probe-search.mjs bash-alias.mjs /opt/paper-reader/
 ENV PI_CODING_AGENT_DIR=/pi-home PI_SKIP_VERSION_CHECK=1
 # Runtime overrides with the numeric paper-reader service uid:gid.
 USER 1000:1000

@@ -20,7 +20,8 @@ class Handler(BaseHTTPRequestHandler):
             finish = "stop"
         else:
             calls = [
-                ("bash", {"command": "pwd; printf 'sandbox scratch\\n' > notes.txt; wc -c materials/source/*"}),
+                ("Bash", {"command": "pwd; printf 'sandbox scratch\\n' > notes.txt; wc -c materials/source/*", "description": "check current directory"}),
+                ("bash", {"command": "printf 'lowercase works\\n' > lowercase.txt"}),
                 ("web_search", {"query": "Attention Is All You Need arxiv 1706.03762"}),
                 ("web_fetch", {"url": "https://example.com"}),
             ]
