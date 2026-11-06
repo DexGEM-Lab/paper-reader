@@ -347,16 +347,21 @@ main {
 }
 
 .pane-restore-rail {
-  border: var(--border-strong);
-  border-radius: 0;
-  background: var(--paper);
-  color: var(--ink);
+  width: 28px;
+  height: 64px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink-60);
 }
 
 .pane-restore-rail:hover {
   color: var(--sapphire);
-  border-color: var(--sapphire);
+  background: var(--sapphire-wash);
 }
+
+.pane-restore-left { border-right: var(--border-quiet); }
+.pane-restore-right { border-left: var(--border-quiet); }
 
 /* Pane headers */
 .pane-top {
@@ -2568,6 +2573,24 @@ table {
 .workspace-shell.tri-workspace {
   grid-template-columns: var(--left-pane-width, 288px) var(--left-resizer-width, 10px) minmax(0, 1fr);
   height: calc(100dvh - var(--topbar-height, 60px) - 40px);
+}
+
+/* Panes pin their own columns: collapsed panes are display:none and would
+   otherwise let auto-placement move remaining panes into the wrong tracks. */
+.workspace-shell.tri-workspace .pane-left { grid-column: 1; }
+.workspace-shell.tri-workspace .pane-resizer-left { grid-column: 2; }
+.workspace-shell.tri-workspace .pane-center { grid-column: 3; }
+.workspace-shell.tri-workspace .pane-resizer-right { grid-column: 4; }
+.workspace-shell.tri-workspace .pane-right { grid-column: 5; }
+
+@media (max-width: 999.98px) {
+  .workspace-shell.tri-workspace .pane-left,
+  .workspace-shell.tri-workspace .pane-resizer-left,
+  .workspace-shell.tri-workspace .pane-center,
+  .workspace-shell.tri-workspace .pane-resizer-right,
+  .workspace-shell.tri-workspace .pane-right {
+    grid-column: 1;
+  }
 }
 
 .pane-resizer-right {
