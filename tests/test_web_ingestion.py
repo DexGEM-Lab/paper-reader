@@ -326,6 +326,11 @@ class SnapshotHeaderTests(unittest.TestCase):
         self.assertNotIn("# MolmoAct 2", stripped)
         self.assertIn("May 5, 2026", stripped)
 
+    def test_strips_heading_with_atx_closing_sequence(self) -> None:
+        snapshot = "# FluxVLA Engine Documentation#\n\nBody text that must survive.\n"
+        stripped = strip_duplicate_snapshot_header(snapshot, "FluxVLA Engine Documentation")
+        self.assertEqual(stripped, "Body text that must survive.")
+
     def test_keeps_unrelated_later_heading(self) -> None:
         snapshot = "Topic name\n\nSome body paragraph.\n\n## Abstract\n\nBody.\n"
         self.assertEqual(strip_duplicate_snapshot_header(snapshot, "Topic name"), snapshot)

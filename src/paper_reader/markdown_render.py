@@ -105,7 +105,9 @@ def strip_duplicate_snapshot_header(markdown: str, title: str) -> str:
 
 
 def _title_key(value: str) -> str:
-    return re.sub(r"\s+", " ", (value or "")).strip().strip("*_`").casefold()
+    text = re.sub(r"\s+", " ", (value or "")).strip().strip("*_`")
+    # ATX headings may carry a closing sequence of '#'s (``# Title #``).
+    return text.rstrip("#").strip().casefold()
 
 
 def _is_title_heading(text: str, title: str) -> bool:
