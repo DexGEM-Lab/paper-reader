@@ -295,7 +295,7 @@ label span {
   /* ISSUE-005: at browser zoom the CSS viewport shrinks; a 720px minimum
      shell height overflowed small viewports and trapped content in nested
      scroll areas. Size the shell to the actual viewport instead. */
-  height: calc(100dvh - var(--topbar-height, 60px) - 24px);
+  height: calc(100dvh - var(--topbar-height, 60px) - 40px);
   min-height: 320px;
 }
 
@@ -2567,7 +2567,7 @@ table {
    drawer below 1600px and docks as a third column at >=1600px. */
 .workspace-shell.tri-workspace {
   grid-template-columns: var(--left-pane-width, 288px) var(--left-resizer-width, 10px) minmax(0, 1fr);
-  height: calc(100dvh - var(--topbar-height));
+  height: calc(100dvh - var(--topbar-height, 60px) - 40px);
 }
 
 .pane-resizer-right {
@@ -2980,7 +2980,7 @@ table {
   .workspace-shell.tri-workspace,
   .workspace-shell.tri-workspace:not(.right-collapsed) {
     grid-template-columns: minmax(0, 1fr);
-    height: calc(100dvh - var(--topbar-height) - 52px);
+    height: calc(100dvh - var(--topbar-height, 60px) - 76px);
   }
 
   .workspace-shell.tri-workspace .pane-resizer {
