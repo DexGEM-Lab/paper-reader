@@ -104,3 +104,17 @@ def test_feishu_client_caches_token_and_threads():
     assert client.reply('original', '再见', 'two') == 'r2'
     assert client._request.call_count == 3
     assert client._request.call_args.args[1]['reply_in_thread'] is True
+
+
+def test_watcher_cloudflare_user_agent(tmp_path, monkeypatch):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('feedback_watch', 'ops/feedback_watch.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    response = Mock()
+    response.__enter__ = Mock(return_value=response)
+    response.__exit__ = Mock(return_value=False)
+    response.read = Mock(return_value=b'{"entries": [], "cursor": 0}')
+    monkeypatch.setattr(module, 'urlopen', Mock(return_value=response))
+    module.poll('https://example.test', 'token', 0)
+    assert module.urlopen.call_args.args[0].get_header('User-agent') == 'curl/8.0.1'

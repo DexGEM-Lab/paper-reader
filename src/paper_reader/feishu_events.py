@@ -12,6 +12,7 @@ import threading
 import time
 import uuid
 from urllib.request import Request, urlopen
+from urllib.error import HTTPError
 from urllib.parse import quote
 from datetime import datetime, timezone
 from pathlib import Path
@@ -176,8 +177,12 @@ class FeishuClient:
         if token:
             headers['Authorization'] = 'Bearer ' + token
         data = json.dumps(body, ensure_ascii=False).encode() if body is not None else None
-        with urlopen(Request(self.base + path, data=data, headers=headers), timeout=15) as response:
-            payload = json.load(response)
+        try:
+            with urlopen(Request(self.base + path, data=data, headers=headers), timeout=15) as response:
+                payload = json.load(response)
+        except HTTPError as exc:
+            detail = exc.read().decode('utf-8', 'replace')[:2000]
+            raise RuntimeError(f'Feishu HTTP {exc.code}: {detail}') from exc
         if payload.get('code') != 0:
             raise RuntimeError(f"Feishu API error {payload.get('code')}: {payload.get('msg')}")
         return payload

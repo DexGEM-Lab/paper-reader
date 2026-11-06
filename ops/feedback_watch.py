@@ -12,7 +12,7 @@ from urllib.request import Request, urlopen
 
 def poll(url, token, cursor):
     request = Request(f'{url.rstrip("/")}/internal/feedback/pending?cursor={cursor}',
-                      headers={'Authorization': f'Bearer {token}'})
+                      headers={'Authorization': f'Bearer {token}', 'User-Agent': 'curl/8.0.1'})
     with urlopen(request, timeout=30) as response:
         return json.load(response)
 
