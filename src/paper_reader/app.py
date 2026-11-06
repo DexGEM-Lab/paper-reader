@@ -55,7 +55,7 @@ from .markdown_render import render_markdown
 from .netutils import fetch_public_url
 from .offline_package import build_offline_manifest, manifest_json as build_manifest_json, offline_prompt_arcname, offline_source_arcname
 from .prompt_manager import DEFAULT_PROMPT_SLUG, PromptDefinition, PromptStore, parse_checkbox
-from .screening import ScreeningPacket, internal_link_reason, mandatory_drop_reason, screen_packets
+from .screening import ScreeningPacket, candidate_packet, internal_link_reason, mandatory_drop_reason, screen_packets
 from .settings import SettingsStore
 from .source_archive import day_paper_map, load_source_day, load_source_days, local_pdf_path_for
 from .task_queue import PaperJobQueue
@@ -2767,6 +2767,9 @@ def create_app(
                     max_bytes=runtime_config.fetch_max_bytes,
                     max_redirects=runtime_config.fetch_max_redirects,
                 )
+                reason = internal_link_reason(candidate_packet(url=response.final_url, context_text=""))
+                if reason:
+                    raise PermissionError(f"链接未通过内容筛选：{reason}")
                 if not response.body.startswith(b"%PDF-"):
                     raise RuntimeError("The remote response is not a PDF document.")
                 with tempfile.NamedTemporaryFile(
@@ -2777,6 +2780,8 @@ def create_app(
                     temp_path = Path(handle.name)
                     handle.write(response.body)
                 return temp_path
+            except PermissionError:
+                raise
             except Exception as exc:
                 last_error = exc
                 if temp_path is not None:

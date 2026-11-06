@@ -597,6 +597,17 @@ class WebImportIntegrationTests(unittest.TestCase):
         self.assertIsNone(self.app.team_store.find_paper_by_source("canonical_url", url))
         self.assertEqual(list(self.library.rglob("*.md")), [])
 
+    def test_pdf_redirect_to_internal_host_is_rejected_without_retry(self) -> None:
+        url = "https://example.com/paper.pdf"
+        response = fetched(b"%PDF-1.7 test", url="https://reader.dex-gem.ai/private.pdf", content_type="application/pdf")
+        handler = self.app.action_queue._handlers["remote-import"]
+        with patch("src.paper_reader.app.fetch_public_url", return_value=response) as fetch:
+            result = handler(self.action(url), lambda *args: None, lambda: False)
+        self.assertEqual(result["items"][0]["status"], "failed")
+        self.assertIn("内部", result["items"][0]["message"])
+        fetch.assert_called_once()
+        self.assertEqual(list(self.library.rglob("*.pdf")), [])
+
     def test_web_import_creates_snapshot_team_record_and_reader_view(self) -> None:
         url = "https://example.com/research/system?utm_source=feishu"
         provenance = [
