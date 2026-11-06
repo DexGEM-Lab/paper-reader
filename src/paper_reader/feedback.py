@@ -146,7 +146,7 @@ class FeedbackAgent:
                 except Exception:
                     LOG.warning('Could not fetch feedback thread context', exc_info=True)
         prompt = (f"{PRODUCT}\n将用户反馈分类为 bug、feature_request、question、noise。只输出 JSON，字段 category, summary_zh, severity, confidence (0到1)。"
-                  "对于 question，若仅凭上述产品信息可以回答，额外返回 answer_zh，否则 answer_zh 为空。纯闲聊、非反馈为 noise。"
+                  "对于 question，若仅凭上述产品信息可以回答，额外返回 answer_zh，否则 answer_zh 为空。纯闲聊、非反馈、对已有 ISSUE/FR 的登记确认、修复或评估进展通告均为 noise；仅在消息提出新的问题或请求时创建新条目。"
                   f"\n发送者：{sender}\n回复上下文：{context[:2000]}\n消息：{job['text'][:4000]}")
         result = parse_triage(get_llm_client(self.config).complete([{'role': 'user', 'content': prompt}], model=self.config.llm_cheap_model))
         with self.connect() as db:
