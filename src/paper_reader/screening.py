@@ -9,11 +9,13 @@ maintenance CLI and import scripts use identical packets and decisions.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable, Protocol
+from urllib.parse import unquote, urlsplit
 
 SCREENABLE_KINDS = frozenset({"paper", "article", "project", "news"})
 _DECISIONS = frozenset({"keep", "drop", "borderline"})
@@ -139,14 +141,40 @@ def candidate_packet(*, url: str, context_text: str, title: str = "", kind: str 
     )
 
 
-def mandatory_drop_reason(packet: ScreeningPacket) -> str | None:
-    """Return the deterministic import-gate rejection reason, if any.
+def internal_link_reason(packet: ScreeningPacket) -> str | None:
+    """Reject our infrastructure and private work before any fetch or item creation."""
+    try:
+        parsed = urlsplit(packet.url)
+        host = (parsed.hostname or "").casefold().rstrip(".")
+    except ValueError:
+        return None  # The import URL validator reports malformed URLs.
+    owner = unquote(parsed.path).strip("/").split("/", 1)[0].casefold()
+    if host in {"github.com", "www.github.com"} and (owner == "dexgem-lab" or owner.startswith("dexrobot")):
+        return "DexGEM 自有 GitHub 仓库，不纳入书库。"
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        address = None
+    private_network = address is not None and (
+        address in ipaddress.ip_network("10.0.0.0/8") or address in ipaddress.ip_network("192.168.0.0/16")
+    )
+    if ((host.endswith(".dex-gem.ai") and host not in {"www.dex-gem.ai", "blog.dex-gem.ai"})
+            or host == "dexrobot.feishu.cn" or host.startswith(("coder.", "litellm.")) or private_network):
+        return "内部基础设施或内部工作空间链接，不纳入书库。"
+    context = " ".join(str(entry.get("context_text") or "") for entry in packet.provenance if isinstance(entry, dict)).casefold()
+    if any(marker in context for marker in (
+        "内部基础设施", "内部部署", "内网地址", "内网服务", "内部工作空间",
+        "internal infrastructure", "internal dashboard", "internal deployment", "coder workspace",
+    )):
+        return "链接上下文表明这是内部基础设施，不纳入书库。"
+    return None
 
-    These observations are stronger than an LLM's semantic judgment: an error
-    snapshot has no reading value, and a JavaScript shell is not the source page
-    the user asked to archive.  Keep this policy independent of URL reputation
-    and Feishu context so promising-looking marketing links cannot bypass it.
-    """
+
+def mandatory_drop_reason(packet: ScreeningPacket) -> str | None:
+    """Return deterministic policy or extraction rejection before semantic screening."""
+    reason = internal_link_reason(packet)
+    if reason:
+        return reason
     fetch_status = clean_text(packet.fetch_status, limit=50).casefold()
     if fetch_status in {"failed", "paywalled", "error", "unextractable"}:
         return f"网页正文提取失败（状态：{fetch_status}）。"

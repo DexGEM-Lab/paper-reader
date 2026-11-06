@@ -55,7 +55,7 @@ from .markdown_render import render_markdown
 from .netutils import fetch_public_url
 from .offline_package import build_offline_manifest, manifest_json as build_manifest_json, offline_prompt_arcname, offline_source_arcname
 from .prompt_manager import DEFAULT_PROMPT_SLUG, PromptDefinition, PromptStore, parse_checkbox
-from .screening import ScreeningPacket, mandatory_drop_reason, screen_packets
+from .screening import ScreeningPacket, internal_link_reason, mandatory_drop_reason, screen_packets
 from .settings import SettingsStore
 from .source_archive import day_paper_map, load_source_day, load_source_days, local_pdf_path_for
 from .task_queue import PaperJobQueue
@@ -3007,6 +3007,16 @@ def create_app(
             if should_abort():
                 raise InterruptedError("Import interrupted.")
             target = str(item["target"])
+            provenance = action.payload.get("provenance") or []
+            matching_provenance = [entry for entry in provenance if isinstance(entry, dict) and (not entry.get("url") or entry.get("url") == target)] if isinstance(provenance, list) else []
+            reason = internal_link_reason(ScreeningPacket(
+                item_id=target, url=target, title="", kind="unknown", provenance=matching_provenance,
+                content="", fetch_status="not-fetched",
+            ))
+            if reason:
+                update_action_item(items, key=target, status="failed", message=f"链接未通过内容筛选：{reason}")
+                report(action_progress_percent(items), f"链接未通过内容筛选：{target}", build_action_result_payload(items))
+                continue
             update_action_item(items, key=target, status="resolving", message="正在识别链接类型。")
             report(action_progress_percent(items), f"正在识别：{target}", build_action_result_payload(items))
             try:

@@ -35,7 +35,7 @@
 - `PAPER_READER_GITHUB_TOKEN=`（可选的只读 GitHub PAT；未设置时 GitHub API 匿名额度为 60 次/小时）
 - `PAPER_READER_SCREEN_IMPORTS=true`（默认开启：普通网页抓取后用 cheap model 语义筛选；arXiv/OpenReview/直链 PDF 跳过）
 
-GitHub 仓库、`/tree/`、`/blob/` 和 `/releases` 链接通过 `api.github.com` 提取仓库元数据、README 和最新 release notes，不依赖 GitHub 的网页 DOM。
+GitHub 仓库、`/tree/`、`/blob/` 和 `/releases` 链接通过 `api.github.com` 提取仓库元数据、README 和最新 release notes，不依赖 GitHub 的网页 DOM。导入前始终拒绝 DexGEM-Lab / DexRobot 自有 GitHub 仓库、内部基础设施及工作空间链接；该规则不依赖 LLM 筛选开关。`dex-gem.ai`、`www.dex-gem.ai` 和 `blog.dex-gem.ai` 的公开研究内容仍可导入。
 
 `PAPER_READER_LIBRARY_DIR` 和 `PAPER_READER_SOURCES_ARCHIVE_DIR` 覆盖各自目录；未设置时从 `PAPER_READER_DATA_DIR` 派生。主论文库、SQLite 协作数据、Prompt 结果和 Sources 归档都在这些目录中，不随 Git 提交。
 

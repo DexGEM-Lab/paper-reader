@@ -22,6 +22,28 @@ class FakeLLM:
 
 
 class ScreeningDecisionTests(unittest.TestCase):
+    def test_internal_links_are_forced_drops_and_public_research_remains_eligible(self) -> None:
+        from src.paper_reader.screening import mandatory_drop_reason
+
+        rejected = [
+            "https://github.com/DexGEM-Lab/tenon-pi-client/releases/tag/v1",
+            "https://github.com/DexRobot-SDK/project",
+            "https://reader.dex-gem.ai/login", "https://dexrobot.feishu.cn/wiki/page",
+            "http://192.168.1.8/status", "http://10.1.2.3/foo",
+            "https://coder.example.org/workspace", "https://litellm.example.org/",
+        ]
+        for url in rejected:
+            with self.subTest(url=url):
+                self.assertTrue(mandatory_drop_reason(candidate_packet(url=url, context_text="")))
+        for url in ["https://dex-gem.ai/blog/research", "https://blog.dex-gem.ai/post", "https://github.com/otherlab/research", "https://10.example.org/research"]:
+            with self.subTest(url=url):
+                self.assertIsNone(mandatory_drop_reason(candidate_packet(url=url, context_text="research paper")))
+        packet = candidate_packet(url="https://example.org/deploy", context_text="内部部署的管理控制台")
+        self.assertIn("上下文", mandatory_drop_reason(packet) or "")
+        client = FakeLLM('[]')
+        self.assertEqual(screen_packets([packet], client)[0].decision, "drop")
+        self.assertEqual(client.calls, [])
+
     def test_batch_screening_returns_keep_and_drop(self) -> None:
         client = FakeLLM(
             '[{"url":"https://github.com/lab/project","decision":"keep","reason":"research repository",'

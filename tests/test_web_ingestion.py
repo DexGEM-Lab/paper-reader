@@ -571,6 +571,22 @@ class WebImportIntegrationTests(unittest.TestCase):
             ):
                 return handler(self.action(url, provenance=provenance), lambda *args, **kwargs: None, lambda: False)
 
+    def test_own_github_and_internal_context_stop_before_fetch_or_creation(self) -> None:
+        handler = self.app.action_queue._handlers["remote-import"]
+        for url, provenance in [
+            ("https://github.com/DexGEM-Lab/tenon-pi-client", []),
+            ("https://github.com/DexRobot-SDK/repo", []),
+            ("https://example.com/deploy", [{"url": "https://example.com/deploy", "context_text": "内部部署的管理控制台"}]),
+        ]:
+            with self.subTest(url=url), patch.object(self.app.library.web_resources, "fetch_and_store") as fetch:
+                result = handler(self.action(url, provenance=provenance), lambda *args: None, lambda: False)
+                item = result["items"][0]
+                self.assertEqual(item["status"], "failed")
+                self.assertIn("不纳入书库", item["message"])
+                fetch.assert_not_called()
+                self.assertIsNone(self.app.team_store.find_paper_by_source("canonical_url", url))
+        self.assertEqual(list(self.library.rglob("*.md")), [])
+
     def test_web_import_creates_snapshot_team_record_and_reader_view(self) -> None:
         url = "https://example.com/research/system?utm_source=feishu"
         provenance = [
