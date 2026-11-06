@@ -702,6 +702,7 @@ main {
 .collection-list-zone {
   flex: 0 1 42%;
   min-height: 150px;
+  max-height: 310px;
   border-bottom: var(--border-strong);
 }
 

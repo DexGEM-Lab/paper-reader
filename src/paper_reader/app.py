@@ -3945,7 +3945,7 @@ def create_app(
                 selected_collection_memberships = app.team_store.collection_memberships_for_paper(  # type: ignore[attr-defined]
                     rel_path=selected_paper.rel_path, user_id=actor_id
                 )
-                if active_collection is not None:
+                if active_collection is not None and state["selected_rel_path"]:
                     app.team_store.record_collection_event(  # type: ignore[attr-defined]
                         user_id=actor_id,
                         collection_id=(int(active_collection) if active_collection != "all" else None),

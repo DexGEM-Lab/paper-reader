@@ -310,6 +310,23 @@ class CollectionRouteTests(unittest.TestCase):
         self.assertIn("撤销", removed_html)
         self.assertIn('name="present" value="1"', removed_html)
 
+    def test_retrieval_event_requires_explicit_paper_selection(self) -> None:
+        collection_id = self.app.team_store.create_collection(
+            owner_type="user", user_id=self.admin.id, name="Metrics"
+        )
+        self.app.team_store.set_collection_membership(
+            collection_id=collection_id,
+            rel_path="sample.md",
+            user_id=self.admin.id,
+            present=True,
+        )
+        self.client.get(f"/?collection={collection_id}")
+        with self.app.team_store._connect() as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM collection_events").fetchone()[0], 0)
+        self.client.get(f"/?collection={collection_id}&paper=sample.md")
+        with self.app.team_store._connect() as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM collection_events").fetchone()[0], 1)
+
     def test_csrf_protects_collection_mutations(self) -> None:
         self.app.config["CSRF_PROTECTION_ENABLED"] = True
         rejected = self.client.post(

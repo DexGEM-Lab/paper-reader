@@ -1900,7 +1900,7 @@ class TeamStore:
                 LEFT JOIN collection_items ci ON ci.paper_id = p.id
                 LEFT JOIN collections c ON c.id = ci.collection_id
                 GROUP BY p.id
-                ORDER BY COALESCE(p.sort_date, p.updated_at) DESC, p.id DESC
+                ORDER BY saver_count DESC, COALESCE(p.sort_date, p.updated_at) DESC, p.id DESC
                 LIMIT ?
                 """,
                 (max(1, limit),),
